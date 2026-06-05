@@ -1,0 +1,25 @@
+[Unit]
+Description=Peech V2Ray Telegram Bot
+Documentation=https://github.com/behnood30-droid/behnooddtdth
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/peech-bot
+EnvironmentFile=/opt/peech-bot/.env
+ExecStart=/opt/peech-bot/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=peech-bot
+
+# محدودیت‌های امنیتی
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,55 +1,39 @@
-# پلن‌های فروش
-# data_limit_gb: حجم به گیگابایت (0 = نامحدود)
-# duration_days: مدت زمان به روز
-# price_toman: قیمت به تومان (برای نمایش به کاربر)
-# price_usdt:  قیمت به تتر (برای پرداخت در تتراپی)
+# این فایل دیگر توسط کد خوانده نمی‌شود.
+# پلن‌ها در plans.py و تنظیمات در .env تعریف می‌شوند.
+# این فایل فقط برای مستندات نگه داشته شده.
+
 plans:
-  - id: p1
-    title: "۳۰ گیگ - ۱ ماهه"
-    data_limit_gb: 30
-    duration_days: 30
-    price_toman: 150000
-    price_usdt: 2.5
+  - id: 1
+    gb: 10
+    days: 30
+    price_toman: 120000
+    price_rial: 1200000
+    label: "۱۰ گیگ — ۱۲۰ هزار تومان"
 
-  - id: p2
-    title: "۵۰ گیگ - ۱ ماهه"
-    data_limit_gb: 50
-    duration_days: 30
-    price_toman: 220000
-    price_usdt: 3.7
+  - id: 2
+    gb: 30
+    days: 30
+    price_toman: 300000
+    price_rial: 3000000
+    label: "۳۰ گیگ — ۳۰۰ هزار تومان"
 
-  - id: p3
-    title: "۱۰۰ گیگ - ۱ ماهه"
-    data_limit_gb: 100
-    duration_days: 30
-    price_toman: 400000
-    price_usdt: 6.8
+  - id: 3
+    gb: 50
+    days: 30
+    price_toman: 450000
+    price_rial: 4500000
+    label: "۵۰ گیگ — ۴۵۰ هزار تومان"
 
-  - id: p4
-    title: "نامحدود - ۱ ماهه"
-    data_limit_gb: 0
-    duration_days: 30
-    price_toman: 650000
-    price_usdt: 11.0
+  - id: 4
+    gb: 100
+    days: 30
+    price_toman: 700000
+    price_rial: 7000000
+    label: "۱۰۰ گیگ — ۷۰۰ هزار تومان"
 
-# پیام‌های ربات
-messages:
-  welcome: |
-    سلام 👋
-    به ربات فروش کانفیگ خوش اومدی.
-    یکی از پلن‌های زیر رو انتخاب کن:
-  payment_pending: |
-    سفارش شماره {order_id} ثبت شد.
-    برای پرداخت روی لینک زیر بزن:
-    {pay_url}
-
-    بعد از پرداخت، کانفیگ خودکار براتون فرستاده می‌شه.
-  payment_done: |
-    ✅ پرداخت تأیید شد!
-    لینک اشتراک شما:
-    `{sub_url}`
-
-    این لینک رو در v2rayNG / Streisand / Hiddify / NekoBox وارد کنید.
-  payment_failed: |
-    ❌ پرداخت تأیید نشد یا منقضی شده.
-    اگه مبلغ از حسابت کم شده، با پشتیبانی تماس بگیر.
+  - id: 5
+    gb: 200
+    days: 30
+    price_toman: 1600000
+    price_rial: 16000000
+    label: "۲۰۰ گیگ — ۱٬۶۰۰ هزار تومان"

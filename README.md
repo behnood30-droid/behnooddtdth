@@ -1,84 +1,154 @@
-# ربات فروش کانفیگ (PasarGuard + Tetrapay)
+# ربات فروش کانفیگ V2Ray
 
-ربات تلگرام برای فروش خودکار کانفیگ از پنل **PasarGuard** با پرداخت **تتراپی (USDT)**.
+ربات تلگرام برای فروش خودکار کانفیگ V2Ray با درگاه پرداخت **tetra98** و پنل **PasarGuard**.
 
 ## جریان کار
 
-1. کاربر `/start` می‌زند → لیست پلن‌ها را می‌بیند.
-2. روی پلن می‌زند → ربات فاکتور تتراپی می‌سازد و لینک پرداخت می‌فرستد.
-3. کاربر پرداخت می‌کند → تتراپی به `/tetrapay/callback` می‌زند.
-4. ربات کاربر را در پنل PasarGuard می‌سازد و لینک ساب (subscription URL) را برای کاربر می‌فرستد.
+```
+کاربر → /start → انتخاب پلن → لینک پرداخت tetra98
+→ پرداخت → callback به /webhook/payment → تأیید با tetra98
+→ ساخت کاربر در PasarGuard → ارسال لینک ساب به کاربر
+```
 
-## نصب
+## پیش‌نیازها
+
+- Python 3.11+
+- Ubuntu 24.04 (یا هر distro دیگه‌ای)
+- دامنه با SSL (برای دریافت callback از tetra98)
+- Nginx + Certbot
+
+## ساختار فایل‌ها
+
+```
+peech-bot/
+├── main.py          # نقطه ورود — telegram polling + FastAPI
+├── bot.py           # هندلرهای تلگرام
+├── webhook.py       # FastAPI: دریافت callback پرداخت
+├── tetra.py         # کلاینت tetra98
+├── pasarguard.py    # کلاینت پنل PasarGuard
+├── delivery.py      # منطق ساخت کاربر و ارسال کانفیگ
+├── db.py            # دیتابیس SQLite
+├── plans.py         # تعریف پلن‌ها
+├── config.py        # خواندن ENV
+├── .env.example     # نمونه متغیرهای محیطی
+├── peech-bot.service # systemd service
+└── nginx.conf       # Nginx reverse proxy
+```
+
+## نصب روی VPS
+
+### ۱. دریافت کد
 
 ```bash
-python3 -m venv .venv
+sudo mkdir -p /opt/peech-bot
+sudo chown ubuntu:ubuntu /opt/peech-bot
+cd /opt/peech-bot
+git clone https://github.com/behnood30-droid/behnooddtdth.git .
+```
+
+### ۲. محیط مجازی Python
+
+```bash
+python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-
-cp .env.example .env
-# .env را با مقادیر واقعی پر کن
 ```
 
-## تنظیمات مهم
-
-### `.env`
-- `TELEGRAM_BOT_TOKEN`: توکن ربات از @BotFather
-- `PASARGUARD_*`: آدرس پنل + یوزر/پس ادمین
-- `PASARGUARD_DEFAULT_GROUP_IDS`: گروه‌(های) پیش‌فرضی که کاربر جدید به آن‌ها اضافه می‌شود (از پنل شناسه گروه را پیدا کن)
-- `TETRAPAY_API_KEY`: کلید API تتراپی
-- `TETRAPAY_WEBHOOK_SECRET`: اگر تتراپی امضای webhook می‌فرستد، اینجا بگذار
-- `PUBLIC_BASE_URL`: آدرس عمومی سرور تو (مثلاً `https://bot.example.com`) — این آدرس باید از اینترنت قابل دسترسی باشد تا callback تتراپی برسد
-
-### `config.yaml`
-پلن‌ها اینجا تعریف می‌شوند. هر تغییر در پلن‌ها فقط با ریستارت ربات اعمال می‌شود.
-
-## اجرا
+### ۳. تنظیم متغیرهای محیطی
 
 ```bash
-python bot.py
+cp .env.example .env
+nano .env          # مقادیر واقعی رو وارد کن
 ```
 
-ربات هم polling تلگرام را اجرا می‌کند هم وب‌سرور webhook را روی `WEBHOOK_PORT` (پیش‌فرض 8080).
+مقادیر مورد نیاز:
 
-پشت یک reverse proxy (Caddy/Nginx) با HTTPS بگذار و آدرس عمومی را در `PUBLIC_BASE_URL` قرار بده.
+| متغیر | توضیح |
+|-------|-------|
+| `TELEGRAM_BOT_TOKEN` | توکن ربات از @BotFather |
+| `ADMIN_TELEGRAM_ID` | آی‌دی عددی تلگرام ادمین (از @userinfobot) |
+| `TETRA_API_KEY` | کلید API از داشبورد tetra98.com |
+| `PASARGUARD_URL` | آدرس پنل مثلاً `https://my-panel.com:8000` |
+| `PASARGUARD_USERNAME` | یوزر ادمین پنل |
+| `PASARGUARD_PASSWORD` | پسورد ادمین پنل |
+| `PASARGUARD_GROUP_ID` | شناسه گروه VLESS در پنل |
+| `WEBHOOK_DOMAIN` | دامنه عمومی سرور مثلاً `https://bot.example.com` |
+| `WEBHOOK_PORT` | پورت داخلی FastAPI (پیش‌فرض: `8080`) |
+
+### ۴. Nginx + SSL
+
+```bash
+sudo apt install nginx certbot python3-certbot-nginx -y
+
+# nginx config را کپی کن و your-domain.com را با دامنه واقعی جایگزین کن
+sudo cp nginx.conf /etc/nginx/sites-available/peech-bot
+sudo nano /etc/nginx/sites-available/peech-bot   # دامنه رو تغییر بده
+
+sudo ln -s /etc/nginx/sites-available/peech-bot /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+
+# SSL بگیر
+sudo certbot --nginx -d your-domain.com
+```
+
+### ۵. systemd service
+
+```bash
+# User=ubuntu را با نام کاربر واقعی جایگزین کن
+sudo cp peech-bot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable peech-bot
+sudo systemctl start peech-bot
+```
+
+بررسی وضعیت:
+
+```bash
+sudo systemctl status peech-bot
+sudo journalctl -u peech-bot -f   # لاگ زنده
+```
+
+## تست بدون پرداخت واقعی
+
+به‌عنوان ادمین می‌توانید سفارش را دستی تحویل بدهید:
+
+```
+/deliver <order_id>
+```
+
+مثال: `/deliver A3F2C891B704E1D5`
+
+## دستورات ربات
+
+| دستور | توضیح |
+|-------|-------|
+| `/start` | شروع و نمایش پلن‌ها |
+| `/my_orders` | لیست سفارش‌های کاربر |
+| `/deliver <id>` | تحویل دستی (فقط ادمین) |
+
+## پلن‌ها
+
+| پلن | حجم | مدت | قیمت (تومان) |
+|-----|-----|-----|--------------|
+| ۱ | ۱۰ گیگ | ۳۰ روز | ۱۲۰٬۰۰۰ |
+| ۲ | ۳۰ گیگ | ۳۰ روز | ۳۰۰٬۰۰۰ |
+| ۳ | ۵۰ گیگ | ۳۰ روز | ۴۵۰٬۰۰۰ |
+| ۴ | ۱۰۰ گیگ | ۳۰ روز | ۷۰۰٬۰۰۰ |
+| ۵ | ۲۰۰ گیگ | ۳۰ روز | ۱٬۶۰۰٬۰۰۰ |
+
+برای تغییر پلن‌ها، فایل `plans.py` را ویرایش کن و سرویس را ریستارت بده.
 
 ## نکات مهم
 
-### پنل PasarGuard
-کد بر اساس مسیرهای استاندارد PasarGuard نوشته شده:
-- `POST /api/admin/token` برای لاگین
-- `POST /api/user` برای ساخت کاربر
+### PasarGuard
+- API این پنل مشابه Marzban است.
+- اگر `subscription_url` در پاسخ نبود، کد خودکار با GET دوباره می‌گیرد.
+- پنل روی پورت ۸۰۰۰ با self-signed cert کار می‌کند — SSL verify غیرفعال است.
 
-اگر پاسخ ساخت کاربر فیلد `subscription_url` نداشت، کد اتوماتیک `GET /api/user/{username}` می‌زند تا لینک ساب را بگیرد.
+### tetra98
+- ربات callback را دریافت می‌کند، سپس با `/api/verify` تأیید مجدد می‌گیرد.
+- در صورت شکست verify، پرداخت نادیده گرفته می‌شود.
 
-### تتراپی
-چون مستندات دقیق تتراپی عمومی نبود، کد با ساختار متداول REST نوشته شده. اگر مسیر یا نام فیلد فرق دارد، فقط `src/tetrapay.py` را تطبیق بده:
-- اگر مسیر ساخت فاکتور `/invoice/create` نیست → تغییر بده
-- اگر فیلد `payment_url` نام دیگری دارد → کد به `pay_url` و `url` هم نگاه می‌کند، فیلد جدید را اضافه کن
-- اگر امضای webhook به جای HMAC-SHA256 الگوریتم دیگری دارد → `verify_webhook` را اصلاح کن
-
-### تست بدون پرداخت واقعی
-به‌عنوان ادمین می‌توانی سفارش را دستی تحویل بدهی:
-```
-/deliver 5
-```
-(آی‌دی ادمین باید در `TELEGRAM_ADMIN_IDS` باشد)
-
-## ساختار
-
-```
-.
-├── bot.py                # نقطه ورود
-├── config.yaml           # پلن‌ها و پیام‌ها
-├── requirements.txt
-├── .env.example
-└── src/
-    ├── config.py         # بارگذاری تنظیمات
-    ├── db.py             # SQLite (سفارش‌ها)
-    ├── pasarguard.py     # کلاینت پنل
-    ├── tetrapay.py       # کلاینت درگاه
-    ├── delivery.py       # منطق تحویل سفارش
-    ├── handlers.py       # هندلرهای تلگرام
-    └── webhook.py        # callback تتراپی (aiohttp)
-```
+### Retry
+- در صورت شکست ساخت کاربر در پنل، تا ۳ بار با backoff تلاش مجدد می‌شه.
+- بعد از ۳ شکست، به کاربر و ادمین اطلاع داده می‌شه.
