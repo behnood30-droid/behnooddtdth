@@ -1,0 +1,55 @@
+# پلن‌های فروش
+# data_limit_gb: حجم به گیگابایت (0 = نامحدود)
+# duration_days: مدت زمان به روز
+# price_toman: قیمت به تومان (برای نمایش به کاربر)
+# price_usdt:  قیمت به تتر (برای پرداخت در تتراپی)
+plans:
+  - id: p1
+    title: "۳۰ گیگ - ۱ ماهه"
+    data_limit_gb: 30
+    duration_days: 30
+    price_toman: 150000
+    price_usdt: 2.5
+
+  - id: p2
+    title: "۵۰ گیگ - ۱ ماهه"
+    data_limit_gb: 50
+    duration_days: 30
+    price_toman: 220000
+    price_usdt: 3.7
+
+  - id: p3
+    title: "۱۰۰ گیگ - ۱ ماهه"
+    data_limit_gb: 100
+    duration_days: 30
+    price_toman: 400000
+    price_usdt: 6.8
+
+  - id: p4
+    title: "نامحدود - ۱ ماهه"
+    data_limit_gb: 0
+    duration_days: 30
+    price_toman: 650000
+    price_usdt: 11.0
+
+# پیام‌های ربات
+messages:
+  welcome: |
+    سلام 👋
+    به ربات فروش کانفیگ خوش اومدی.
+    یکی از پلن‌های زیر رو انتخاب کن:
+  payment_pending: |
+    سفارش شماره {order_id} ثبت شد.
+    برای پرداخت روی لینک زیر بزن:
+    {pay_url}
+
+    بعد از پرداخت، کانفیگ خودکار براتون فرستاده می‌شه.
+  payment_done: |
+    ✅ پرداخت تأیید شد!
+    لینک اشتراک شما:
+    `{sub_url}`
+
+    این لینک رو در v2rayNG / Streisand / Hiddify / NekoBox وارد کنید.
+  payment_failed: |
+    ❌ پرداخت تأیید نشد یا منقضی شده.
+    اگه مبلغ از حسابت کم شده، با پشتیبانی تماس بگیر.
