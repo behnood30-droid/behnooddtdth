@@ -1,6 +1,7 @@
 """فلوی پرداخت: pirooz و USDT."""
 import logging
 import time
+from datetime import datetime, timezone
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
@@ -11,7 +12,7 @@ from delivery import create_config_and_deliver
 from pasarguard import PasarGuardClient
 from pirooz import PiroozClient
 from plans import get_plan
-from usdt import generate_unique_amount
+from usdt import check_bep20, check_trc20, generate_unique_amount
 from utils import fa
 
 log = logging.getLogger(__name__)
@@ -25,6 +26,16 @@ def _make_payment_id(telegram_id: int) -> str:
 
 def _ownership_ok(payment, telegram_id: int) -> bool:
     return payment is not None and payment.telegram_id == telegram_id
+
+
+def _created_at_ts(payment) -> int:
+    try:
+        dt = datetime.fromisoformat(str(payment.created_at))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return int(dt.timestamp())
+    except Exception:
+        return int(time.time()) - 1800
 
 
 # ─── انتخاب روش پرداخت ───────────────────────────────────────────────────────
@@ -98,13 +109,13 @@ async def on_pay_pirooz(query, context: ContextTypes.DEFAULT_TYPE, plan_id: int)
     await query.edit_message_text(
         f"💵 *پرداخت ریالی*\n"
         f"{SEP}\n\n"
-        f"📦 پلن: {fa(plan.gb)} گیگ \\- ۳۰ روزه\n"
+        f"📦 پلن: {fa(plan.gb)} گیگ - ۳۰ روزه\n"
         f"💰 مبلغ: {fa(plan.price_toman)} تومان\n\n"
         f"🆔 شناسه سفارش:\n"
         f"`{payment_id}`\n\n"
         f"{SEP}\n\n"
-        f"برای پرداخت روی دکمه پایین کلیک کن\\. به ربات پیروزچنج هدایت میشی "
-        f"و میتونی با کارت بانکی پرداخت کنی\\.\n\n"
+        f"برای پرداخت روی دکمه پایین کلیک کن. به ربات پیروزچنج هدایت میشی "
+        f"و میتونی با کارت بانکی پرداخت کنی.\n\n"
         f"⏱ این سفارش تا ۳۰ دقیقه فعاله",
         parse_mode="Markdown",
         reply_markup=keyboard,
@@ -127,7 +138,7 @@ async def on_pay_usdt(query, context: ContextTypes.DEFAULT_TYPE, plan_id: int) -
     await query.edit_message_text(
         f"💎 *پرداخت با USDT*\n"
         f"{SEP}\n\n"
-        f"📦 پلن: {fa(plan.gb)} گیگ \\- ۳۰ روزه\n"
+        f"📦 پلن: {fa(plan.gb)} گیگ - ۳۰ روزه\n"
         f"💰 قیمت: {fa(plan.price_toman)} تومان\n\n"
         f"شبکه پرداخت رو انتخاب کن:",
         parse_mode="Markdown",
@@ -147,9 +158,8 @@ async def on_usdt_network(query, context: ContextTypes.DEFAULT_TYPE, plan_id: in
     rate_str = db.get_setting("usdt_irt_rate")
     if not rate_str:
         await query.edit_message_text(
-            f"⏳ قیمت USDT در حال بروزرسانیه\\. لطفاً چند دقیقه دیگه تلاش کن "
+            f"⏳ قیمت USDT در حال بروزرسانیه. لطفاً چند دقیقه دیگه تلاش کن "
             f"یا با پشتیبانی تماس بگیر: @{settings.support_username}",
-            parse_mode="Markdown",
         )
         try:
             await context.bot.send_message(
@@ -186,15 +196,13 @@ async def on_usdt_network(query, context: ContextTypes.DEFAULT_TYPE, plan_id: in
     net_label = "BEP20 (BSC)" if network == "BEP20" else "TRC20 (Tron)"
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 کپی آدرس", callback_data=f"copy_addr:{payment_id}")],
-        [InlineKeyboardButton("📋 کپی مبلغ", callback_data=f"copy_amt:{payment_id}")],
         [InlineKeyboardButton("🔄 بررسی وضعیت", callback_data=f"chk:{payment_id}")],
         [InlineKeyboardButton("❌ لغو سفارش", callback_data=f"cnl:{payment_id}")],
     ])
     await query.edit_message_text(
         f"💸 *پرداخت USDT*\n"
         f"{SEP}\n\n"
-        f"📦 پلن: {fa(plan.gb)} گیگ \\- ۳۰ روزه\n"
+        f"📦 پلن: {fa(plan.gb)} گیگ - ۳۰ روزه\n"
         f"💰 معادل تومانی: {fa(plan.price_toman)} تومان\n\n"
         f"🌐 شبکه: *{net_label}*\n"
         f"💎 مبلغ دقیق: `{unique} USDT`\n\n"
@@ -221,48 +229,81 @@ async def on_check_payment(query, context: ContextTypes.DEFAULT_TYPE, payment_id
 
     payment = db.get_payment(payment_id)
     if not _ownership_ok(payment, query.from_user.id):
-        await query.answer("⛔ این سفارش متعلق به شما نیست.", show_alert=True)
+        await query.message.reply_text("⛔ این سفارش متعلق به شما نیست.")
         return
 
     if payment.status == "delivered":
-        await query.answer("✅ این سفارش قبلاً تحویل داده شده.", show_alert=True)
+        await query.message.reply_text("✅ این سفارش قبلاً تحویل داده شده.")
         return
 
     if payment.status in ("expired", "failed"):
-        await query.answer(f"❌ وضعیت سفارش: {payment.status}", show_alert=True)
+        await query.message.reply_text(f"❌ وضعیت سفارش: {payment.status}")
         return
 
     if payment.payment_method == "pirooz":
         pirooz: PiroozClient = context.bot_data["pirooz"]
-        data = await pirooz.check_status(payment_id)
+        try:
+            data = await pirooz.check_status(payment_id)
+        except Exception as e:
+            log.exception("pirooz check_status failed: %s", e)
+            await query.message.reply_text("❌ خطا در بررسی وضعیت. دوباره تلاش کن.")
+            return
         pirooz_status = data.get("status", "unknown")
 
         if pirooz_status == "approved":
             tracking = data.get("tracking_code", "")
             db.confirm_payment(payment_id, tracking_code=tracking)
-            await query.answer("✅ پرداخت تأیید شد! در حال ساخت سرویس...", show_alert=True)
+            await query.message.reply_text("✅ پرداخت تأیید شد! در حال ساخت سرویس...")
             await create_config_and_deliver(
                 payment_id=payment_id,
                 bot=context.bot, db=db, panel=panel, settings=settings,
             )
         elif pirooz_status == "pending":
-            await query.answer("⏳ هنوز پرداخت نشده. صبر کن و دوباره بررسی کن.", show_alert=True)
+            await query.message.reply_text("⏳ هنوز پرداخت نشده. صبر کن و دوباره بررسی کن.")
         elif pirooz_status in ("rejected", "expired"):
             db.expire_payment(payment_id)
-            await query.answer(f"❌ پرداخت {pirooz_status} شد. سفارش لغو شد.", show_alert=True)
+            await query.message.reply_text(f"❌ پرداخت {pirooz_status} شد. سفارش لغو شد.")
         else:
-            await query.answer("🔍 وضعیت نامشخص. کمی صبر کن.", show_alert=True)
+            await query.message.reply_text("🔍 وضعیت نامشخص. کمی صبر کن.")
     else:
         if payment.status == "confirmed":
-            await query.answer("✅ پرداخت تأیید شد! در حال ساخت سرویس...", show_alert=True)
+            await query.message.reply_text("✅ پرداخت تأیید شد! در حال ساخت سرویس...")
             await create_config_and_deliver(
                 payment_id=payment_id,
                 bot=context.bot, db=db, panel=panel, settings=settings,
             )
         else:
-            await query.answer(
-                "⏳ تراکنش هنوز تأیید نشده. ربات هر ۳۰ ثانیه چک میکنه. صبر کن.", show_alert=True
-            )
+            # immediate blockchain check for this payment
+            after_ts = _created_at_ts(payment)
+            matched = False
+            try:
+                if payment.payment_method == "usdt_bep20":
+                    txs = await check_bep20(settings.usdt_bep20_address, settings.bscscan_api_key, after_ts)
+                    for tx in txs:
+                        if abs(tx["amount"] - payment.unique_amount) < 0.0001:
+                            db.confirm_payment(payment_id, tx_hash=tx["hash"])
+                            matched = True
+                            break
+                elif payment.payment_method == "usdt_trc20":
+                    txs = await check_trc20(settings.usdt_trc20_address, after_ts)
+                    for tx in txs:
+                        if abs(tx["amount"] - payment.unique_amount) < 0.0001:
+                            db.confirm_payment(payment_id, tx_hash=tx["hash"])
+                            matched = True
+                            break
+            except Exception as e:
+                log.exception("blockchain check failed: %s", e)
+
+            if matched:
+                await query.message.reply_text("✅ تراکنش پیدا شد! در حال ساخت سرویس...")
+                await create_config_and_deliver(
+                    payment_id=payment_id,
+                    bot=context.bot, db=db, panel=panel, settings=settings,
+                )
+            else:
+                await query.message.reply_text(
+                    "⏳ تراکنش هنوز تأیید نشده. ربات هر ۳۰ ثانیه چک میکنه. صبر کن."
+                )
 
 
 # ─── لغو سفارش ───────────────────────────────────────────────────────────────
@@ -271,35 +312,10 @@ async def on_cancel_payment(query, context: ContextTypes.DEFAULT_TYPE, payment_i
     db: DB = context.bot_data["db"]
     payment = db.get_payment(payment_id)
     if not _ownership_ok(payment, query.from_user.id):
-        await query.answer("⛔ این سفارش متعلق به شما نیست.", show_alert=True)
+        await query.message.reply_text("⛔ این سفارش متعلق به شما نیست.")
         return
     db.cancel_payment(payment_id)
     await query.edit_message_text(
         f"❌ سفارش لغو شد.\n🆔 شناسه: `{payment_id}`",
         parse_mode="Markdown",
     )
-
-
-# ─── کپی آدرس/مبلغ ───────────────────────────────────────────────────────────
-
-async def on_copy_addr(query, context: ContextTypes.DEFAULT_TYPE, payment_id: str) -> None:
-    db: DB = context.bot_data["db"]
-    settings: Settings = context.bot_data["settings"]
-    payment = db.get_payment(payment_id)
-    if not _ownership_ok(payment, query.from_user.id):
-        await query.answer("⛔ دسترسی ندارید.", show_alert=True)
-        return
-    address = (
-        settings.usdt_bep20_address if payment.network == "BEP20"
-        else settings.usdt_trc20_address
-    )
-    await query.answer(f"آدرس کپی شد:\n{address}", show_alert=True)
-
-
-async def on_copy_amt(query, context: ContextTypes.DEFAULT_TYPE, payment_id: str) -> None:
-    db: DB = context.bot_data["db"]
-    payment = db.get_payment(payment_id)
-    if not _ownership_ok(payment, query.from_user.id):
-        await query.answer("⛔ دسترسی ندارید.", show_alert=True)
-        return
-    await query.answer(f"مبلغ: {payment.unique_amount} USDT", show_alert=True)

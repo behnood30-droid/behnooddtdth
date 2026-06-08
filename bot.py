@@ -32,8 +32,6 @@ from pasarguard import PasarGuardClient
 from payment import (
     on_cancel_payment,
     on_check_payment,
-    on_copy_addr,
-    on_copy_amt,
     on_pay_pirooz,
     on_pay_usdt,
     on_usdt_network,
@@ -384,14 +382,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # لغو سفارش
     if data.startswith("cnl:"):
         await on_cancel_payment(query, context, data[4:])
-        return
-
-    # کپی آدرس / مبلغ
-    if data.startswith("copy_addr:"):
-        await on_copy_addr(query, context, data[10:])
-        return
-    if data.startswith("copy_amt:"):
-        await on_copy_amt(query, context, data[9:])
         return
 
     # لینک Sub
