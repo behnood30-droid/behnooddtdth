@@ -1,4 +1,4 @@
-"""منطق تحویل سفارش: ساخت کاربر در پنل و ارسال لینک به مشتری."""
+"""ساخت کانفیگ با retry و refund در صورت شکست."""
 import asyncio
 import logging
 import secrets
@@ -6,45 +6,40 @@ import secrets
 from telegram import Bot
 
 from config import Settings
-from db import DB, Order
+from db import DB
 from pasarguard import PasarGuardClient, PasarGuardError
+from plans import fa
 
 log = logging.getLogger(__name__)
 
 MSG_SUCCESS = (
-    "🎉 پرداخت تأیید شد!\n\n"
-    "لینک اشتراک VPN شما آماده‌ست:\n"
+    "🎉 سرویس شما آماده‌ست!\n\n"
+    "🔗 <b>لینک اشتراک:</b>\n"
     "<code>{sub_link}</code>\n\n"
     "📱 <b>آموزش اتصال:</b>\n"
-    "• <b>اندروید:</b> نصب <b>v2rayNG</b> ← + ← Import config from clipboard\n"
-    "• <b>iOS:</b> نصب <b>Streisand</b> یا <b>Shadowrocket</b> ← + ← از URL وارد کن\n"
-    "• <b>ویندوز:</b> نصب <b>v2rayN</b> ← سرورها ← افزودن از لینک اشتراک\n"
-    "• <b>macOS:</b> نصب <b>V2Box</b> یا <b>Hiddify</b> ← افزودن از URL اشتراک\n\n"
-    "⚠️ این لینک مختص شماست. آن را به کس دیگری ندهید.\n"
-    "در صورت مشکل /support را بزنید."
-)
-
-MSG_DELIVERY_FAILED = (
-    "پرداخت شما تأیید شد ولی در ساخت کانفیگ مشکلی پیش اومد 😔\n\n"
-    "شماره سفارش: <code>{order_id}</code>\n\n"
-    "این شماره رو به پشتیبانی بدید تا کانفیگ برات ارسال بشه."
+    "• <b>اندروید:</b> نصب v2rayNG ← + ← Import config from clipboard\n"
+    "• <b>iOS:</b> نصب Streisand یا Shadowrocket ← + ← از URL وارد کن\n"
+    "• <b>ویندوز:</b> نصب v2rayN ← سرورها ← افزودن از لینک اشتراک\n"
+    "• <b>macOS:</b> نصب V2Box یا Hiddify ← افزودن از URL اشتراک\n\n"
+    "⚠️ این لینک مختص شماست. آن را به کس دیگری ندهید."
 )
 
 
-async def deliver_order(
-    order: Order,
+async def create_config_and_deliver(
+    order_id: str,
+    plan_gb: int,
+    days: int,
+    price_toman: int,
+    telegram_id: int,
     bot: Bot,
     db: DB,
     panel: PasarGuardClient,
     settings: Settings,
-) -> None:
-    if order.status == "delivered":
-        log.info("order %s already delivered, skipping", order.order_id)
-        return
-    if order.status != "paid":
-        log.warning("order %s has status=%s, cannot deliver", order.order_id, order.status)
-        return
-
+) -> bool:
+    """
+    کانفیگ می‌سازه. True = موفق، False = شکست (موجودی برگشت داده شد).
+    ۳ بار با backoff تلاش می‌کنه.
+    """
     username = f"peech_{secrets.token_hex(4)}"
     last_err: Exception | None = None
 
@@ -52,44 +47,40 @@ async def deliver_order(
         try:
             result = await panel.create_user(
                 username=username,
-                data_limit_gb=order.plan_gb,
-                duration_days=order.days,
-                order_id=order.order_id,
+                data_limit_gb=plan_gb,
+                duration_days=days,
+                order_id=order_id,
             )
             sub_link = result["subscription_url"]
-            db.mark_delivered(order.order_id, result["username"], sub_link)
+            db.deliver_order(order_id, result["username"], sub_link)
+            db.increment_purchases(telegram_id)
             await bot.send_message(
-                order.telegram_user_id,
+                telegram_id,
                 MSG_SUCCESS.format(sub_link=sub_link),
                 parse_mode="HTML",
             )
-            log.info(
-                "order %s delivered — user=%s tg=%s",
-                order.order_id,
-                result["username"],
-                order.telegram_user_id,
-            )
-            return
+            log.info("order %s delivered — panel_user=%s", order_id, result["username"])
+            return True
         except PasarGuardError as e:
             last_err = e
             log.warning(
-                "delivery attempt %d/3 failed for order %s: %s",
-                attempt + 1,
-                order.order_id,
-                e,
+                "config attempt %d/3 failed for order %s: %s",
+                attempt + 1, order_id, e,
             )
             if attempt < 2:
                 await asyncio.sleep(2 ** attempt)
 
-    # همه ۳ تلاش ناموفق بود
-    db.mark_failed(order.order_id)
-    log.error("delivery permanently failed for order %s: %s", order.order_id, last_err)
+    # همه تلاش‌ها شکست خورد — برگردوندن موجودی
+    db.fail_order(order_id)
+    db.add_balance(telegram_id, price_toman)
+    log.error("delivery permanently failed for order %s: %s", order_id, last_err)
 
     try:
         await bot.send_message(
-            order.telegram_user_id,
-            MSG_DELIVERY_FAILED.format(order_id=order.order_id),
-            parse_mode="HTML",
+            telegram_id,
+            f"متأسفانه در ساخت سرویس مشکلی پیش اومد 😔\n\n"
+            f"مبلغ {fa(f'{price_toman:,}')} تومان به کیف پولت برگشت.\n"
+            f"لطفاً دوباره تلاش کن یا با پشتیبانی تماس بگیر.",
         )
     except Exception:
         log.exception("could not notify user about delivery failure")
@@ -97,13 +88,14 @@ async def deliver_order(
     try:
         await bot.send_message(
             settings.admin_telegram_id,
-            f"⚠️ خطا در تحویل سفارش\n"
-            f"سفارش: <code>{order.order_id}</code>\n"
-            f"کاربر: {order.telegram_user_id}"
-            + (f" (@{order.telegram_username})" if order.telegram_username else "")
-            + f"\nپلن: {order.plan_gb} گیگ\n"
+            f"⚠️ خطا در ساخت کانفیگ\n"
+            f"سفارش: <code>{order_id}</code>\n"
+            f"کاربر: {telegram_id}\n"
+            f"پلن: {plan_gb} گیگ\n"
             f"خطا: {last_err}",
             parse_mode="HTML",
         )
     except Exception:
-        log.exception("could not notify admin about delivery failure")
+        log.exception("could not notify admin")
+
+    return False

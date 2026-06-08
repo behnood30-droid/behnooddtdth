@@ -1,52 +1,42 @@
 # ربات فروش کانفیگ V2Ray
 
-ربات تلگرام برای فروش خودکار کانفیگ V2Ray با درگاه پرداخت **tetra98** و پنل **PasarGuard**.
+ربات تلگرام با کیف پول داخلی، شارژ USDT (BEP20/TRC20)، و تحویل خودکار کانفیگ از PasarGuard.
 
 ## جریان کار
 
 ```
-کاربر → /start → انتخاب پلن → لینک پرداخت tetra98
-→ پرداخت → callback به /webhook/payment → تأیید با tetra98
-→ ساخت کاربر در PasarGuard → ارسال لینک ساب به کاربر
+کاربر → شارژ کیف پول با USDT → تأیید خودکار تراکنش → انتخاب پلن
+→ کسر از موجودی → ساخت کانفیگ در PasarGuard → ارسال لینک ساب
 ```
-
-## پیش‌نیازها
-
-- Python 3.11+
-- Ubuntu 24.04 (یا هر distro دیگه‌ای)
-- دامنه با SSL (برای دریافت callback از tetra98)
-- Nginx + Certbot
 
 ## ساختار فایل‌ها
 
 ```
-peech-bot/
-├── main.py          # نقطه ورود — telegram polling + FastAPI
+├── main.py          # نقطه ورود — polling + scheduler
 ├── bot.py           # هندلرهای تلگرام
-├── webhook.py       # FastAPI: دریافت callback پرداخت
-├── tetra.py         # کلاینت tetra98
+├── scheduler.py     # چک تراکنش‌ها هر ۳۰ ثانیه
+├── wallet.py        # قیمت USDT + بررسی BSCScan/Tronscan
+├── delivery.py      # ساخت کانفیگ با retry و refund
 ├── pasarguard.py    # کلاینت پنل PasarGuard
-├── delivery.py      # منطق ساخت کاربر و ارسال کانفیگ
-├── db.py            # دیتابیس SQLite
-├── plans.py         # تعریف پلن‌ها
+├── db.py            # SQLite (users, orders, wallet_charges)
+├── plans.py         # پلن‌ها
 ├── config.py        # خواندن ENV
-├── .env.example     # نمونه متغیرهای محیطی
-├── peech-bot.service # systemd service
-└── nginx.conf       # Nginx reverse proxy
+└── peech-bot.service # systemd service
 ```
 
-## نصب روی VPS
+## نصب روی Ubuntu 24.04
 
 ### ۱. دریافت کد
 
 ```bash
 sudo mkdir -p /opt/peech-bot
-sudo chown ubuntu:ubuntu /opt/peech-bot
+sudo chown $USER:$USER /opt/peech-bot
 cd /opt/peech-bot
 git clone https://github.com/behnood30-droid/behnooddtdth.git .
+git checkout claude/v2ray-telegram-bot-2moSn
 ```
 
-### ۲. محیط مجازی Python
+### ۲. محیط مجازی
 
 ```bash
 python3.11 -m venv .venv
@@ -54,101 +44,71 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### ۳. تنظیم متغیرهای محیطی
+### ۳. متغیرهای محیطی
 
 ```bash
 cp .env.example .env
-nano .env          # مقادیر واقعی رو وارد کن
+nano .env
 ```
-
-مقادیر مورد نیاز:
 
 | متغیر | توضیح |
 |-------|-------|
-| `TELEGRAM_BOT_TOKEN` | توکن ربات از @BotFather |
-| `ADMIN_TELEGRAM_ID` | آی‌دی عددی تلگرام ادمین (از @userinfobot) |
-| `TETRA_API_KEY` | کلید API از داشبورد tetra98.com |
-| `PASARGUARD_URL` | آدرس پنل مثلاً `https://my-panel.com:8000` |
-| `PASARGUARD_USERNAME` | یوزر ادمین پنل |
-| `PASARGUARD_PASSWORD` | پسورد ادمین پنل |
-| `PASARGUARD_GROUP_ID` | شناسه گروه VLESS در پنل |
-| `WEBHOOK_DOMAIN` | دامنه عمومی سرور مثلاً `https://bot.example.com` |
-| `WEBHOOK_PORT` | پورت داخلی FastAPI (پیش‌فرض: `8080`) |
+| `TELEGRAM_BOT_TOKEN` | از @BotFather |
+| `ADMIN_TELEGRAM_ID` | آی‌دی عددی ادمین (از @userinfobot) |
+| `PASARGUARD_URL` | آدرس پنل مثل `https://panel.com:8000` |
+| `PASARGUARD_USERNAME` | ادمین پنل |
+| `PASARGUARD_PASSWORD` | پسورد ادمین |
+| `PASARGUARD_GROUP_ID` | شناسه گروه VLESS از بخش Groups پنل |
+| `USDT_BEP20_ADDRESS` | آدرس کیف پول BEP20 شما |
+| `USDT_TRC20_ADDRESS` | آدرس کیف پول TRC20 شما |
+| `BSCSCAN_API_KEY` | از bscscan.com/myapikey |
+| `SUPPORT_USERNAME` | یوزرنیم تلگرام پشتیبانی (بدون @) |
 
-### ۴. Nginx + SSL
-
-```bash
-sudo apt install nginx certbot python3-certbot-nginx -y
-
-# nginx config را کپی کن و your-domain.com را با دامنه واقعی جایگزین کن
-sudo cp nginx.conf /etc/nginx/sites-available/peech-bot
-sudo nano /etc/nginx/sites-available/peech-bot   # دامنه رو تغییر بده
-
-sudo ln -s /etc/nginx/sites-available/peech-bot /etc/nginx/sites-enabled/
-sudo nginx -t && sudo systemctl reload nginx
-
-# SSL بگیر
-sudo certbot --nginx -d your-domain.com
-```
-
-### ۵. systemd service
+### ۴. systemd service
 
 ```bash
-# User=ubuntu را با نام کاربر واقعی جایگزین کن
+# در peech-bot.service، User=ubuntu را با کاربر واقعی جایگزین کن
 sudo cp peech-bot.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable peech-bot
 sudo systemctl start peech-bot
-```
-
-بررسی وضعیت:
-
-```bash
 sudo systemctl status peech-bot
-sudo journalctl -u peech-bot -f   # لاگ زنده
 ```
 
-## تست بدون پرداخت واقعی
-
-به‌عنوان ادمین می‌توانید سفارش را دستی تحویل بدهید:
-
-```
-/deliver <order_id>
+مشاهده لاگ:
+```bash
+sudo journalctl -u peech-bot -f
 ```
 
-مثال: `/deliver A3F2C891B704E1D5`
-
-## دستورات ربات
+## دستورات ادمین
 
 | دستور | توضیح |
 |-------|-------|
-| `/start` | شروع و نمایش پلن‌ها |
-| `/my_orders` | لیست سفارش‌های کاربر |
-| `/deliver <id>` | تحویل دستی (فقط ادمین) |
+| `/addbalance <id> <amount>` | افزودن موجودی دستی |
+| `/cancel` | لغو عملیات جاری |
 
 ## پلن‌ها
 
-| پلن | حجم | مدت | قیمت (تومان) |
-|-----|-----|-----|--------------|
-| ۱ | ۱۰ گیگ | ۳۰ روز | ۱۲۰٬۰۰۰ |
-| ۲ | ۳۰ گیگ | ۳۰ روز | ۳۰۰٬۰۰۰ |
-| ۳ | ۵۰ گیگ | ۳۰ روز | ۴۵۰٬۰۰۰ |
-| ۴ | ۱۰۰ گیگ | ۳۰ روز | ۷۰۰٬۰۰۰ |
-| ۵ | ۲۰۰ گیگ | ۳۰ روز | ۱٬۶۰۰٬۰۰۰ |
+| پلن | حجم | مدت | قیمت |
+|-----|-----|-----|------|
+| ۱ | ۱۰ گیگ | ۳۰ روز | ۱۲۰٬۰۰۰ تومان |
+| ۲ | ۳۰ گیگ | ۳۰ روز | ۳۰۰٬۰۰۰ تومان |
+| ۳ | ۵۰ گیگ | ۳۰ روز | ۴۵۰٬۰۰۰ تومان |
+| ۴ | ۱۰۰ گیگ | ۳۰ روز | ۷۰۰٬۰۰۰ تومان |
+| ۵ | ۲۰۰ گیگ | ۳۰ روز | ۱٬۶۰۰٬۰۰۰ تومان |
 
-برای تغییر پلن‌ها، فایل `plans.py` را ویرایش کن و سرویس را ریستارت بده.
+## نحوه شارژ کیف پول
+
+۱. کاربر «💰 افزایش موجودی» می‌زند
+۲. شبکه BEP20 یا TRC20 انتخاب می‌کند
+۳. مبلغ USDT را وارد می‌کند
+۴. ربات قیمت لحظه‌ای از Nobitex می‌گیرد
+۵. یک مبلغ یکتا (مثل ۱۰.۰۰۳) ساخته می‌شود
+۶. ربات هر ۳۰ ثانیه BSCScan/Tronscan را چک می‌کند
+۷. پس از تأیید، موجودی به تومان اضافه می‌شود (timeout: 30 دقیقه)
 
 ## نکات مهم
 
-### PasarGuard
-- API این پنل مشابه Marzban است.
-- اگر `subscription_url` در پاسخ نبود، کد خودکار با GET دوباره می‌گیرد.
-- پنل روی پورت ۸۰۰۰ با self-signed cert کار می‌کند — SSL verify غیرفعال است.
-
-### tetra98
-- ربات callback را دریافت می‌کند، سپس با `/api/verify` تأیید مجدد می‌گیرد.
-- در صورت شکست verify، پرداخت نادیده گرفته می‌شود.
-
-### Retry
-- در صورت شکست ساخت کاربر در پنل، تا ۳ بار با backoff تلاش مجدد می‌شه.
-- بعد از ۳ شکست، به کاربر و ادمین اطلاع داده می‌شه.
+- **Retry**: در صورت شکست ساخت کانفیگ، ۳ بار با backoff تلاش می‌شود
+- **Refund**: اگر بعد از ۳ تلاش کانفیگ ساخته نشد، موجودی برگردانده می‌شود
+- **Admin alert**: تمام خطاها به ادمین اطلاع داده می‌شود

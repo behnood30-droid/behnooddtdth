@@ -25,7 +25,6 @@ class PasarGuardClient:
         self._group_id = group_id
         self._token: str | None = None
         self._token_exp: float = 0.0
-        # verify=False چون پنل ممکنه روی پورت غیر‌استاندارد با self-signed cert باشه
         self._client = httpx.AsyncClient(timeout=20.0, verify=False)
 
     async def close(self) -> None:
@@ -43,7 +42,7 @@ class PasarGuardClient:
         self._token = data["access_token"]
         self._token_exp = time.time() + 23 * 3600
 
-    async def _auth_headers(self) -> dict:
+    async def _auth(self) -> dict:
         if not self._token or time.time() >= self._token_exp:
             await self._login()
         return {"Authorization": f"Bearer {self._token}"}
@@ -55,7 +54,6 @@ class PasarGuardClient:
         duration_days: int,
         order_id: str = "",
     ) -> dict:
-        """کاربر جدید می‌سازه و دیکشنری شامل subscription_url برمی‌گردونه."""
         expire_ts = int(time.time()) + duration_days * 86400
         payload = {
             "username": username,
@@ -66,7 +64,7 @@ class PasarGuardClient:
             "group_ids": [self._group_id],
             "note": f"Order: {order_id}",
         }
-        headers = await self._auth_headers()
+        headers = await self._auth()
         resp = await self._client.post(
             f"{self.base_url}/api/user",
             json=payload,
@@ -77,26 +75,19 @@ class PasarGuardClient:
                 f"create_user failed {resp.status_code}: {resp.text[:400]}"
             )
         body = resp.json()
-        log.debug("pasarguard create_user response: %s", body)
-
         sub_url = body.get("subscription_url", "")
         if not sub_url:
             token = body.get("subscription_token") or body.get("sub_token")
             if token:
                 sub_url = f"{self.base_url}/sub/{token}/"
         if not sub_url:
-            sub_url = await self._fetch_sub_url(username)
-
-        return {
-            "username": body.get("username", username),
-            "subscription_url": sub_url,
-        }
+            sub_url = await self._fetch_sub_url(body.get("username", username))
+        return {"username": body.get("username", username), "subscription_url": sub_url}
 
     async def _fetch_sub_url(self, username: str) -> str:
-        headers = await self._auth_headers()
+        headers = await self._auth()
         resp = await self._client.get(
-            f"{self.base_url}/api/user/{username}",
-            headers=headers,
+            f"{self.base_url}/api/user/{username}", headers=headers
         )
         if resp.status_code != 200:
             raise PasarGuardError(
@@ -107,8 +98,5 @@ class PasarGuardClient:
         if url.startswith("/"):
             url = f"{self.base_url}{url}"
         if not url:
-            raise PasarGuardError(
-                "subscription_url در پاسخ پنل یافت نشد. "
-                "ساختار API پنل رو از https://github.com/PasarGuard/panel چک کن."
-            )
+            raise PasarGuardError("subscription_url در پاسخ پنل یافت نشد.")
         return url

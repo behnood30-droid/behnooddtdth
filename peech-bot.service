@@ -1,6 +1,5 @@
 [Unit]
 Description=Peech V2Ray Telegram Bot
-Documentation=https://github.com/behnood30-droid/behnooddtdth
 After=network-online.target
 Wants=network-online.target
 
@@ -16,8 +15,6 @@ RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=peech-bot
-
-# محدودیت‌های امنیتی
 NoNewPrivileges=true
 PrivateTmp=true
 

@@ -1,16 +1,15 @@
-"""نقطه ورود: ربات تلگرام + وب‌سرور FastAPI را همزمان اجرا می‌کند."""
+"""نقطه ورود: ربات تلگرام + scheduler پس‌زمینه."""
 import asyncio
 import logging
+import signal
 
-import uvicorn
 from telegram.ext import Application
 
 from bot import register_handlers
 from config import load_settings
 from db import DB
 from pasarguard import PasarGuardClient
-from tetra import TetraClient
-from webhook import create_app
+from scheduler import charge_monitor_loop
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,9 +21,7 @@ log = logging.getLogger("main")
 
 async def run() -> None:
     settings = load_settings()
-
     db = DB(settings.db_path)
-    tetra = TetraClient(settings.tetra_api_key)
     panel = PasarGuardClient(
         base_url=settings.pasarguard_url,
         username=settings.pasarguard_username,
@@ -32,41 +29,42 @@ async def run() -> None:
         group_id=settings.pasarguard_group_id,
     )
 
-    tg_app: Application = Application.builder().token(settings.telegram_token).build()
-    tg_app.bot_data.update({
-        "settings": settings,
-        "db": db,
-        "tetra": tetra,
-        "panel": panel,
-    })
-    register_handlers(tg_app)
-
-    web_app = create_app(settings, db, tetra, panel, tg_app.bot)
-    uvi_config = uvicorn.Config(
-        web_app,
-        host="0.0.0.0",
-        port=settings.webhook_port,
-        log_level="info",
-        access_log=True,
+    tg_app: Application = (
+        Application.builder().token(settings.telegram_token).build()
     )
-    uvi_server = uvicorn.Server(uvi_config)
+    tg_app.bot_data.update({"settings": settings, "db": db, "panel": panel})
+    register_handlers(tg_app)
 
     await tg_app.initialize()
     await tg_app.start()
     await tg_app.updater.start_polling(drop_pending_updates=True)
-    log.info("Telegram bot polling started")
-    log.info("FastAPI server starting on port %s", settings.webhook_port)
+    log.info("Bot started (polling)")
 
+    # اجرای scheduler به صورت پس‌زمینه
+    monitor_task = asyncio.create_task(
+        charge_monitor_loop(tg_app.bot, db, settings)
+    )
+
+    # صبر برای سیگنال خاتمه
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, stop.set)
+
+    await stop.wait()
+
+    log.info("Shutting down...")
+    monitor_task.cancel()
     try:
-        await uvi_server.serve()
-    finally:
-        log.info("Shutting down...")
-        await tg_app.updater.stop()
-        await tg_app.stop()
-        await tg_app.shutdown()
-        await tetra.close()
-        await panel.close()
-        log.info("Shutdown complete.")
+        await monitor_task
+    except asyncio.CancelledError:
+        pass
+
+    await tg_app.updater.stop()
+    await tg_app.stop()
+    await tg_app.shutdown()
+    await panel.close()
+    log.info("Bye.")
 
 
 if __name__ == "__main__":

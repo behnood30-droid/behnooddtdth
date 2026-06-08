@@ -1,28 +1,33 @@
 """تعریف پلن‌های فروش."""
 from dataclasses import dataclass
 
-
-def _fa(n: int | str) -> str:
-    """اعداد انگلیسی رو به فارسی تبدیل می‌کنه."""
-    return str(n).translate(str.maketrans("0123456789,", "۰۱۲۳۴۵۶۷۸۹٬"))
+_T = str.maketrans("0123456789,", "۰۱۲۳۴۵۶۷۸۹٬")
+_EMOJIS = ("1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣")
 
 
-@dataclass
+def fa(n) -> str:
+    """تبدیل اعداد انگلیسی به فارسی."""
+    return str(n).translate(_T)
+
+
+@dataclass(frozen=True)
 class Plan:
     id: int
     gb: int
     days: int
     price_toman: int
-    price_rial: int
-    label: str
+
+    @property
+    def label(self) -> str:
+        return f"{_EMOJIS[self.id - 1]}  {fa(self.gb)} گیگ — {fa(f'{self.price_toman:,}')} تومان"
 
 
 PLANS: list[Plan] = [
-    Plan(1, 10,  30,   120_000,   1_200_000, "۱۰ گیگ — ۱۲۰ هزار تومان"),
-    Plan(2, 30,  30,   300_000,   3_000_000, "۳۰ گیگ — ۳۰۰ هزار تومان"),
-    Plan(3, 50,  30,   450_000,   4_500_000, "۵۰ گیگ — ۴۵۰ هزار تومان"),
-    Plan(4, 100, 30,   700_000,   7_000_000, "۱۰۰ گیگ — ۷۰۰ هزار تومان"),
-    Plan(5, 200, 30, 1_600_000, 16_000_000, "۲۰۰ گیگ — ۱٬۶۰۰ هزار تومان"),
+    Plan(1, 10,  30,   120_000),
+    Plan(2, 30,  30,   300_000),
+    Plan(3, 50,  30,   450_000),
+    Plan(4, 100, 30,   700_000),
+    Plan(5, 200, 30, 1_600_000),
 ]
 
 
