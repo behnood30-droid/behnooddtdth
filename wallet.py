@@ -1,4 +1,4 @@
-"""توابع کیف پول: قیمت USDT، تولید مبلغ یکتا، چک کردن تراکنش‌ها."""
+"""توابع کیف پول: تولید مبلغ یکتا و چک کردن تراکنش‌های USDT."""
 import logging
 import random
 
@@ -8,18 +8,8 @@ from db import DB
 
 log = logging.getLogger(__name__)
 
-NOBITEX_URL = "https://api.nobitex.ir/market/stats?srcCurrency=usdt&dstCurrency=rls"
 USDT_BEP20_CONTRACT = "0x55d398326f99059ff775485246999027b3197955"
 USDT_TRC20_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
-
-
-async def get_usdt_price_toman() -> int:
-    """قیمت لحظه‌ای تتر به تومان از Nobitex."""
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(NOBITEX_URL)
-    data = resp.json()
-    rial_str = data["stats"]["usdt-rls"]["latest"]
-    return int(float(rial_str) / 10)
 
 
 def generate_unique_amount(base_usdt: float, network: str, db: DB) -> float:
@@ -62,11 +52,7 @@ async def check_bep20_incoming(
             continue
         decimals = int(tx.get("tokenDecimal", "18"))
         amount = int(tx.get("value", 0)) / 10**decimals
-        results.append({
-            "hash": tx["hash"],
-            "amount": amount,
-            "timestamp": ts,
-        })
+        results.append({"hash": tx["hash"], "amount": amount, "timestamp": ts})
     return results
 
 
@@ -82,7 +68,6 @@ async def check_trc20_incoming(address: str, after_ts: int) -> list[dict]:
     data = resp.json()
     results = []
     for tx in data.get("data", []):
-        # block_timestamp در میلی‌ثانیه است
         ts = tx.get("block_timestamp", 0) // 1000
         if ts < after_ts:
             continue

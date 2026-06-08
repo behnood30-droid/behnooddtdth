@@ -23,8 +23,14 @@ from config import Settings
 from db import DB
 from delivery import create_config_and_deliver
 from pasarguard import PasarGuardClient
+from admin import (
+    cmd_admin,
+    handle_admin_callback,
+    handle_admin_media_input,
+    handle_admin_text_input,
+)
 from plans import PLANS, fa, get_plan
-from wallet import generate_unique_amount, get_usdt_price_toman
+from wallet import generate_unique_amount
 
 log = logging.getLogger(__name__)
 
@@ -112,6 +118,11 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = update.message.text or ""
+
+    # ادمین در حال استفاده از پنل؟
+    if await handle_admin_text_input(update, context):
+        return
+
     charge_step = context.user_data.get("charge_step")
 
     # اگه در مرحله وارد کردن مبلغ هستیم
@@ -324,19 +335,27 @@ async def _handle_amount_input(
         )
         return
 
-    # گرفتن قیمت از Nobitex
-    try:
-        price_toman = await get_usdt_price_toman()
-    except Exception as e:
-        log.exception("nobitex failed: %s", e)
-        await update.message.reply_text(
-            "❌ خطا در دریافت قیمت ارز. لطفاً چند دقیقه دیگه تلاش کن."
-        )
-        return
-
-    amount_toman = int(amount_usdt * price_toman)
+    # گرفتن نرخ از تنظیمات ادمین
     db: DB = context.bot_data["db"]
     settings: Settings = context.bot_data["settings"]
+    rate_str = db.get_setting("usdt_irt_rate")
+    if not rate_str:
+        await update.message.reply_text(
+            f"⏳ قیمت در حال بروزرسانی است. لطفاً چند دقیقه دیگه تلاش کن "
+            f"یا با پشتیبانی تماس بگیر: @{settings.support_username}"
+        )
+        try:
+            await context.bot.send_message(
+                settings.admin_telegram_id,
+                "⚠️ یک کاربر سعی کرد شارژ کنه اما قیمت USDT ست نشده.\n"
+                "لطفاً از /admin قیمت رو تنظیم کن.",
+            )
+        except Exception:
+            pass
+        return
+    price_toman = int(rate_str)
+
+    amount_toman = int(amount_usdt * price_toman)
 
     unique = generate_unique_amount(amount_usdt, network, db)
     charge_id = db.create_charge(
@@ -477,6 +496,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             "برای شارژ کیف پول «💰 افزایش موجودی» رو از منو بزن."
         )
 
+    elif data.startswith("admin:"):
+        await handle_admin_callback(update, context, data)
+
+
+# ─── هندلر مدیا (عکس) ────────────────────────────────────────────────────────
+
+async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await handle_admin_media_input(update, context)
+
 
 # ─── ثبت هندلرها ─────────────────────────────────────────────────────────────
 
@@ -487,8 +515,12 @@ def register_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("cancel", cmd_cancel))
     app.add_handler(CommandHandler("addbalance", cmd_admin_balance))
+    app.add_handler(CommandHandler("admin", cmd_admin))
 
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)
+    )
+    app.add_handler(
+        MessageHandler(filters.PHOTO & ~filters.COMMAND, handle_media)
     )
     app.add_handler(CallbackQueryHandler(handle_callback))

@@ -3,6 +3,7 @@ import sqlite3
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
@@ -38,6 +39,12 @@ CREATE TABLE IF NOT EXISTS wallet_charges (
     tx_hash          TEXT,
     created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     confirmed_at     TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS settings (
+    key              TEXT      PRIMARY KEY,
+    value            TEXT      NOT NULL,
+    updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_orders_tg       ON orders(telegram_id);
@@ -120,6 +127,24 @@ class DB:
             ).fetchone()
         return User(**dict(row)) if row else None
 
+    def find_user(self, query: str) -> User | None:
+        """جستجو با telegram_id یا username."""
+        with self._conn() as conn:
+            try:
+                uid = int(query)
+                row = conn.execute(
+                    "SELECT * FROM users WHERE telegram_id = ?", (uid,)
+                ).fetchone()
+                if row:
+                    return User(**dict(row))
+            except ValueError:
+                pass
+            uname = query.lstrip("@").lower()
+            row = conn.execute(
+                "SELECT * FROM users WHERE LOWER(username) = ?", (uname,)
+            ).fetchone()
+        return User(**dict(row)) if row else None
+
     def get_balance(self, telegram_id: int) -> float:
         user = self.get_user(telegram_id)
         return user.balance_toman if user else 0.0
@@ -133,7 +158,6 @@ class DB:
         return self.get_balance(telegram_id)
 
     def deduct_balance(self, telegram_id: int, amount_toman: int) -> bool:
-        """موجودی کسر می‌کنه. True = موفق، False = موجودی کافی نیست."""
         with self._conn() as conn:
             cur = conn.execute(
                 "UPDATE users SET balance_toman = balance_toman - ? "
@@ -148,6 +172,27 @@ class DB:
                 "UPDATE users SET total_purchases = total_purchases + 1 WHERE telegram_id = ?",
                 (telegram_id,),
             )
+
+    def get_user_count(self) -> int:
+        with self._conn() as conn:
+            return conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+
+    def get_all_user_ids(self) -> list[int]:
+        with self._conn() as conn:
+            rows = conn.execute("SELECT telegram_id FROM users").fetchall()
+        return [r[0] for r in rows]
+
+    def list_users_paginated(
+        self, page: int = 0, page_size: int = 20
+    ) -> tuple[list[User], int]:
+        offset = page * page_size
+        with self._conn() as conn:
+            total = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            rows = conn.execute(
+                "SELECT * FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                (page_size, offset),
+            ).fetchall()
+        return [User(**dict(r)) for r in rows], total
 
     # ─── Orders ──────────────────────────────────────────────────────────────
 
@@ -173,9 +218,7 @@ class DB:
 
     def fail_order(self, order_id: str) -> None:
         with self._conn() as conn:
-            conn.execute(
-                "UPDATE orders SET status='failed' WHERE order_id=?", (order_id,)
-            )
+            conn.execute("UPDATE orders SET status='failed' WHERE order_id=?", (order_id,))
 
     def get_order(self, order_id: str) -> Order | None:
         with self._conn() as conn:
@@ -192,6 +235,38 @@ class DB:
                 (telegram_id, limit),
             ).fetchall()
         return [Order(**dict(r)) for r in rows]
+
+    def get_stats(self) -> dict:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with self._conn() as conn:
+            total_users    = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            orders_today   = conn.execute(
+                "SELECT COUNT(*) FROM orders WHERE status='delivered' AND DATE(delivered_at)=?",
+                (today,),
+            ).fetchone()[0]
+            orders_total   = conn.execute(
+                "SELECT COUNT(*) FROM orders WHERE status='delivered'"
+            ).fetchone()[0]
+            rev_today      = conn.execute(
+                "SELECT COALESCE(SUM(price_toman),0) FROM orders "
+                "WHERE status='delivered' AND DATE(delivered_at)=?",
+                (today,),
+            ).fetchone()[0]
+            rev_total      = conn.execute(
+                "SELECT COALESCE(SUM(price_toman),0) FROM orders WHERE status='delivered'"
+            ).fetchone()[0]
+            charges_today  = conn.execute(
+                "SELECT COUNT(*) FROM wallet_charges WHERE status='confirmed' AND DATE(confirmed_at)=?",
+                (today,),
+            ).fetchone()[0]
+        return {
+            "total_users":    total_users,
+            "orders_today":   orders_today,
+            "orders_total":   orders_total,
+            "revenue_today":  int(rev_today),
+            "revenue_total":  int(rev_total),
+            "charges_today":  charges_today,
+        }
 
     # ─── Wallet Charges ──────────────────────────────────────────────────────
 
@@ -266,3 +341,27 @@ class DB:
                 (unique_amount, network),
             ).fetchone()
         return row is not None
+
+    # ─── Settings ─────────────────────────────────────────────────────────────
+
+    def get_setting(self, key: str) -> str | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT value FROM settings WHERE key=?", (key,)
+            ).fetchone()
+        return row[0] if row else None
+
+    def get_setting_updated_at(self, key: str) -> str | None:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT updated_at FROM settings WHERE key=?", (key,)
+            ).fetchone()
+        return row[0] if row else None
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value, updated_at) "
+                "VALUES (?, ?, CURRENT_TIMESTAMP)",
+                (key, value),
+            )
