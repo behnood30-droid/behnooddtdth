@@ -51,17 +51,26 @@ async def check_bep20(address: str, api_key: str, after_ts: int) -> list[dict]:
         return []
 
     results = []
+    logged = 0
     for tx in data.get("result", []):
         ts = int(tx.get("timeStamp", 0))
         if ts < after_ts:
             continue
         if tx.get("to", "").lower() != address.lower():
             continue
+        raw_value = tx.get("value", 0)
+        token_decimal = tx.get("tokenDecimal", "18")
         try:
-            decimals = int(tx.get("tokenDecimal", "18"))
-            amount = int(tx.get("value", 0)) / 10**decimals
+            decimals = int(token_decimal)
+            amount = int(raw_value) / 10**decimals
         except (ValueError, TypeError):
             continue
+        if logged < 5:
+            log.debug(
+                "BSCScan tx found: hash=%s, raw_value=%s, decimal=%s, amount=%s",
+                tx["hash"], raw_value, token_decimal, amount,
+            )
+            logged += 1
         results.append({"hash": tx["hash"], "amount": amount, "timestamp": ts})
     return results
 
@@ -94,10 +103,9 @@ async def check_trc20(address: str, after_ts: int) -> list[dict]:
         ts = tx.get("block_timestamp", 0) // 1000
         if ts < after_ts:
             continue
-        token_info = tx.get("tokenInfo", {})
+        raw_value = tx.get("quant", 0)
         try:
-            decimals = int(token_info.get("tokenDecimal", "6"))
-            amount = int(tx.get("amount", 0)) / 10**decimals
+            amount = int(raw_value) / 1_000_000  # TRC20 USDT always 6 decimals
         except (ValueError, TypeError):
             continue
         results.append({
