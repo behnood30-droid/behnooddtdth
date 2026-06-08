@@ -7,6 +7,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _req(key: str) -> str:
+    v = os.getenv(key, "").strip()
+    if not v:
+        raise RuntimeError(f"Missing required env var: {key}")
+    return v
+
+
 @dataclass
 class Settings:
     telegram_token: str
@@ -15,26 +22,34 @@ class Settings:
     pasarguard_username: str
     pasarguard_password: str
     pasarguard_group_id: int
+    webhook_domain: str
+    webhook_port: int
     usdt_bep20_address: str
     usdt_trc20_address: str
     bscscan_api_key: str
+    pirooz_api_key: str
+    pirooz_provider_key: str
+    pirooz_base_url: str
     support_username: str
-    welcome_image_path: str
     db_path: str
 
 
 def load_settings() -> Settings:
     return Settings(
-        telegram_token=os.environ["TELEGRAM_BOT_TOKEN"],
-        admin_telegram_id=int(os.environ["ADMIN_TELEGRAM_ID"]),
-        pasarguard_url=os.environ["PASARGUARD_URL"].rstrip("/"),
-        pasarguard_username=os.environ["PASARGUARD_USERNAME"],
-        pasarguard_password=os.environ["PASARGUARD_PASSWORD"],
+        telegram_token=_req("TELEGRAM_BOT_TOKEN"),
+        admin_telegram_id=int(_req("ADMIN_TELEGRAM_ID")),
+        pasarguard_url=_req("PASARGUARD_URL").rstrip("/"),
+        pasarguard_username=_req("PASARGUARD_USERNAME"),
+        pasarguard_password=_req("PASARGUARD_PASSWORD"),
         pasarguard_group_id=int(os.getenv("PASARGUARD_GROUP_ID", "1")),
-        usdt_bep20_address=os.environ["USDT_BEP20_ADDRESS"],
-        usdt_trc20_address=os.environ["USDT_TRC20_ADDRESS"],
-        bscscan_api_key=os.environ["BSCSCAN_API_KEY"],
+        webhook_domain=os.getenv("WEBHOOK_DOMAIN", "").rstrip("/"),
+        webhook_port=int(os.getenv("WEBHOOK_PORT", "8080")),
+        usdt_bep20_address=os.getenv("USDT_BEP20_ADDRESS", ""),
+        usdt_trc20_address=os.getenv("USDT_TRC20_ADDRESS", ""),
+        bscscan_api_key=os.getenv("BSCSCAN_API_KEY", ""),
+        pirooz_api_key=os.getenv("PIROOZ_API_KEY", ""),
+        pirooz_provider_key=os.getenv("PIROOZ_PROVIDER_KEY", ""),
+        pirooz_base_url=os.getenv("PIROOZ_BASE_URL", "http://178.63.207.241:8080").rstrip("/"),
         support_username=os.getenv("SUPPORT_USERNAME", "support"),
-        welcome_image_path=os.getenv("WELCOME_IMAGE_PATH", ""),
         db_path=os.getenv("DB_PATH", "./orders.db"),
     )

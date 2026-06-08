@@ -1,27 +1,34 @@
-# ربات فروش کانفیگ V2Ray
+# ربات فروش کانفیگ V2Ray — Peech Bot
 
-ربات تلگرام با کیف پول داخلی، شارژ USDT (BEP20/TRC20)، و تحویل خودکار کانفیگ از PasarGuard.
+ربات تلگرام با پرداخت مستقیم (ریالی + کریپتو) و تحویل خودکار کانفیگ از PasarGuard.
 
 ## جریان کار
 
 ```
-کاربر → شارژ کیف پول با USDT → تأیید خودکار تراکنش → انتخاب پلن
-→ کسر از موجودی → ساخت کانفیگ در PasarGuard → ارسال لینک ساب
+کاربر → انتخاب پلن → انتخاب روش پرداخت
+  ├── پیروزچنج (کارت بانکی) → webhook/polling
+  └── USDT BEP20/TRC20     → polling BSCScan/Tronscan
+→ تأیید پرداخت → ساخت کانفیگ در PasarGuard → تحویل سرویس
 ```
 
 ## ساختار فایل‌ها
 
 ```
-├── main.py          # نقطه ورود — polling + scheduler
-├── bot.py           # هندلرهای تلگرام
-├── scheduler.py     # چک تراکنش‌ها هر ۳۰ ثانیه
-├── wallet.py        # قیمت USDT + بررسی BSCScan/Tronscan
-├── delivery.py      # ساخت کانفیگ با retry و refund
-├── pasarguard.py    # کلاینت پنل PasarGuard
-├── db.py            # SQLite (users, orders, wallet_charges)
-├── plans.py         # پلن‌ها
-├── config.py        # خواندن ENV
-└── peech-bot.service # systemd service
+├── main.py        # نقطه ورود — PTB polling + FastAPI webhook + scheduler
+├── bot.py         # هندلرهای اصلی تلگرام
+├── admin.py       # پنل ادمین (/admin)
+├── payment.py     # فلوی پرداخت (pirooz + USDT)
+├── pirooz.py      # کلاینت API پیروزچنج
+├── usdt.py        # بررسی BSCScan / Tronscan
+├── webhook.py     # FastAPI — دریافت webhook پیروز
+├── delivery.py    # ساخت کانفیگ با retry و notification
+├── scheduler.py   # چک تراکنش‌ها هر ۳۰ ثانیه
+├── pasarguard.py  # کلاینت پنل PasarGuard
+├── db.py          # SQLite (users, payments, settings)
+├── plans.py       # پلن‌ها
+├── config.py      # خواندن ENV
+├── utils.py       # تاریخ شمسی، اعداد فارسی، progress bar
+└── peech-bot.service
 ```
 
 ## نصب روی Ubuntu 24.04
@@ -54,20 +61,42 @@ nano .env
 | متغیر | توضیح |
 |-------|-------|
 | `TELEGRAM_BOT_TOKEN` | از @BotFather |
-| `ADMIN_TELEGRAM_ID` | آی‌دی عددی ادمین (از @userinfobot) |
+| `ADMIN_TELEGRAM_ID` | آی‌دی عددی ادمین |
 | `PASARGUARD_URL` | آدرس پنل مثل `https://panel.com:8000` |
 | `PASARGUARD_USERNAME` | ادمین پنل |
 | `PASARGUARD_PASSWORD` | پسورد ادمین |
-| `PASARGUARD_GROUP_ID` | شناسه گروه VLESS از بخش Groups پنل |
-| `USDT_BEP20_ADDRESS` | آدرس کیف پول BEP20 شما |
-| `USDT_TRC20_ADDRESS` | آدرس کیف پول TRC20 شما |
+| `PASARGUARD_GROUP_ID` | شناسه گروه VLESS از بخش Groups |
+| `WEBHOOK_DOMAIN` | دامنه سرور برای webhook پیروز، مثل `https://bot.example.com` |
+| `WEBHOOK_PORT` | پورت FastAPI (پیش‌فرض: 8080) |
+| `USDT_BEP20_ADDRESS` | آدرس کیف پول BEP20 |
+| `USDT_TRC20_ADDRESS` | آدرس کیف پول TRC20 |
 | `BSCSCAN_API_KEY` | از bscscan.com/myapikey |
-| `SUPPORT_USERNAME` | یوزرنیم تلگرام پشتیبانی (بدون @) |
+| `PIROOZ_API_KEY` | کلید API پیروزچنج |
+| `PIROOZ_PROVIDER_KEY` | کلید provider پیروزچنج |
+| `PIROOZ_BASE_URL` | آدرس API پیروز (پیش‌فرض ست شده) |
+| `SUPPORT_USERNAME` | یوزرنیم تلگرام پشتیبانی |
 
-### ۴. systemd service
+### ۴. Nginx reverse proxy (برای webhook)
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name bot.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/bot.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/bot.example.com/privkey.pem;
+
+    location /webhook/ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+### ۵. systemd service
 
 ```bash
-# در peech-bot.service، User=ubuntu را با کاربر واقعی جایگزین کن
 sudo cp peech-bot.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable peech-bot
@@ -80,35 +109,42 @@ sudo systemctl status peech-bot
 sudo journalctl -u peech-bot -f
 ```
 
-## دستورات ادمین
-
-| دستور | توضیح |
-|-------|-------|
-| `/addbalance <id> <amount>` | افزودن موجودی دستی |
-| `/cancel` | لغو عملیات جاری |
-
 ## پلن‌ها
 
 | پلن | حجم | مدت | قیمت |
 |-----|-----|-----|------|
-| ۱ | ۱۰ گیگ | ۳۰ روز | ۱۲۰٬۰۰۰ تومان |
-| ۲ | ۳۰ گیگ | ۳۰ روز | ۳۰۰٬۰۰۰ تومان |
-| ۳ | ۵۰ گیگ | ۳۰ روز | ۴۵۰٬۰۰۰ تومان |
-| ۴ | ۱۰۰ گیگ | ۳۰ روز | ۷۰۰٬۰۰۰ تومان |
-| ۵ | ۲۰۰ گیگ | ۳۰ روز | ۱٬۶۰۰٬۰۰۰ تومان |
+| 🟢 | ۱۰ گیگ | ۳۰ روز | ۱۲۰,۰۰۰ تومان |
+| 🔵 | ۳۰ گیگ | ۳۰ روز | ۳۰۰,۰۰۰ تومان 🔥 پرفروش |
+| 🟣 | ۵۰ گیگ | ۳۰ روز | ۴۵۰,۰۰۰ تومان |
+| 🟡 | ۱۰۰ گیگ | ۳۰ روز | ۷۰۰,۰۰۰ تومان 💎 ویژه |
+| 🔴 | ۲۰۰ گیگ | ۳۰ روز | ۱,۶۰۰,۰۰۰ تومان 🎁 اقتصادی |
 
-## نحوه شارژ کیف پول
+## روش‌های پرداخت
 
-۱. کاربر «💰 افزایش موجودی» می‌زند
-۲. شبکه BEP20 یا TRC20 انتخاب می‌کند
-۳. مبلغ USDT را وارد می‌کند
-۴. ربات قیمت لحظه‌ای از Nobitex می‌گیرد
-۵. یک مبلغ یکتا (مثل ۱۰.۰۰۳) ساخته می‌شود
-۶. ربات هر ۳۰ ثانیه BSCScan/Tronscan را چک می‌کند
-۷. پس از تأیید، موجودی به تومان اضافه می‌شود (timeout: 30 دقیقه)
+### پیروزچنج (ریالی)
+- کارت‌به‌کارت از طریق ربات @PiroozPayBot
+- webhook فوری + polling هر ۳۰ ثانیه
+
+### USDT کریپتو
+- BEP20 (Binance Smart Chain)
+- TRC20 (Tron)
+- مبلغ یکتا برای شناسایی تراکنش
+- polling BSCScan / Tronscan هر ۳۰ ثانیه
+
+## دستورات ادمین
+
+`/admin` — پنل مدیریت با گزینه‌های:
+- 💵 تنظیم نرخ USDT (تومان)
+- 📊 آمار ربات
+- 👥 لیست کاربران (صفحه‌بندی)
+- 🔍 جستجوی کاربر
+- ⏳ مدیریت پرداخت‌های در انتظار (تأیید/لغو دستی)
+- 🔧 تلاش مجدد برای پرداخت‌های ناموفق
+- 📢 پیام همگانی (متن یا عکس)
 
 ## نکات مهم
 
-- **Retry**: در صورت شکست ساخت کانفیگ، ۳ بار با backoff تلاش می‌شود
-- **Refund**: اگر بعد از ۳ تلاش کانفیگ ساخته نشد، موجودی برگردانده می‌شود
-- **Admin alert**: تمام خطاها به ادمین اطلاع داده می‌شود
+- **Retry**: ۳ بار با backoff در صورت شکست ساخت کانفیگ
+- **مهلت پرداخت**: ۳۰ دقیقه برای USDT و پیروز
+- **امنیت webhook**: اعتبارسنجی X-Signature از پیروزچنج
+- **امنیت callback**: بررسی ownership قبل از هر عملیات

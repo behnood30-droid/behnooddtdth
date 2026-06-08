@@ -50,19 +50,18 @@ class PasarGuardClient:
     async def create_user(
         self,
         username: str,
-        data_limit_gb: int,
-        duration_days: int,
-        order_id: str = "",
+        data_limit: int,
+        expire: int,
+        group_ids: list[int],
     ) -> dict:
-        expire_ts = int(time.time()) + duration_days * 86400
+        """ساخت کاربر. برمیگردونه {'username': ..., 'subscription_url': ..., 'links': [...]}"""
         payload = {
             "username": username,
             "status": "active",
-            "expire": expire_ts,
-            "data_limit": data_limit_gb * 1_073_741_824,
+            "expire": expire,
+            "data_limit": data_limit,
             "data_limit_reset_strategy": "no_reset",
-            "group_ids": [self._group_id],
-            "note": f"Order: {order_id}",
+            "group_ids": group_ids,
         }
         headers = await self._auth()
         resp = await self._client.post(
@@ -75,16 +74,10 @@ class PasarGuardClient:
                 f"create_user failed {resp.status_code}: {resp.text[:400]}"
             )
         body = resp.json()
-        sub_url = body.get("subscription_url", "")
-        if not sub_url:
-            token = body.get("subscription_token") or body.get("sub_token")
-            if token:
-                sub_url = f"{self.base_url}/sub/{token}/"
-        if not sub_url:
-            sub_url = await self._fetch_sub_url(body.get("username", username))
-        return {"username": body.get("username", username), "subscription_url": sub_url}
+        return await self._extract_user_data(body)
 
-    async def _fetch_sub_url(self, username: str) -> str:
+    async def get_user(self, username: str) -> dict:
+        """اطلاعات کاربر از پنل."""
         headers = await self._auth()
         resp = await self._client.get(
             f"{self.base_url}/api/user/{username}", headers=headers
@@ -93,10 +86,28 @@ class PasarGuardClient:
             raise PasarGuardError(
                 f"get_user failed {resp.status_code}: {resp.text[:300]}"
             )
-        body = resp.json()
-        url = body.get("subscription_url", "")
-        if url.startswith("/"):
-            url = f"{self.base_url}{url}"
-        if not url:
-            raise PasarGuardError("subscription_url در پاسخ پنل یافت نشد.")
-        return url
+        return resp.json()
+
+    async def _extract_user_data(self, body: dict) -> dict:
+        username = body.get("username", "")
+        sub_url = body.get("subscription_url", "")
+        if not sub_url:
+            token = body.get("subscription_token") or body.get("sub_token")
+            if token:
+                sub_url = f"{self.base_url}/sub/{token}/"
+        if not sub_url:
+            full = await self.get_user(username)
+            sub_url = full.get("subscription_url", "")
+            if sub_url.startswith("/"):
+                sub_url = f"{self.base_url}{sub_url}"
+            body = full
+        links = body.get("links", [])
+        return {
+            "username": username,
+            "subscription_url": sub_url,
+            "links": links,
+            "used_traffic": body.get("used_traffic", 0),
+            "data_limit": body.get("data_limit", 0),
+            "expire": body.get("expire"),
+            "status": body.get("status", "active"),
+        }

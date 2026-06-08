@@ -1,101 +1,125 @@
-"""تسک پس‌زمینه: چک کردن تراکنش‌های USDT هر ۳۰ ثانیه."""
+"""تسک پس‌زمینه: چک پرداخت‌ها هر ۳۰ ثانیه."""
 import asyncio
 import logging
-import time
-from datetime import datetime, timezone
-
-from telegram import Bot
+from datetime import datetime, timedelta, timezone
 
 from config import Settings
 from db import DB
-from plans import fa
-from wallet import check_bep20_incoming, check_trc20_incoming
+from delivery import create_config_and_deliver
+from pirooz import PiroozClient
+from usdt import check_bep20, check_trc20
 
 log = logging.getLogger(__name__)
 
-CHARGE_TIMEOUT = 30 * 60  # ۳۰ دقیقه
+PAYMENT_TIMEOUT = 30 * 60  # ۳۰ دقیقه
 
 
-async def _check_once(bot: Bot, db: DB, settings: Settings) -> None:
-    charges = db.get_pending_charges()
-    if not charges:
+async def _check_once(bot, db: DB, settings: Settings, pirooz: PiroozClient, panel) -> None:
+    pending = db.get_pending_payments()
+    if not pending:
         return
 
-    log.debug("checking %d pending charge(s)", len(charges))
-    now = int(time.time())
+    log.info("Checking %d pending payments", len(pending))
+    now = datetime.now(timezone.utc)
+    bep20_txs: list | None = None
+    trc20_txs: list | None = None
 
-    for charge in charges:
-        # تبدیل created_at (SQLite CURRENT_TIMESTAMP = UTC بدون zone info)
+    for payment in pending:
         try:
-            dt = datetime.fromisoformat(charge.created_at)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            created_ts = int(dt.timestamp())
+            created = datetime.fromisoformat(payment.created_at)
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
         except Exception:
-            created_ts = now
+            created = now
 
-        # چک timeout
-        if now - created_ts > CHARGE_TIMEOUT:
-            db.expire_charge(charge.charge_id)
-            log.info("charge %s expired", charge.charge_id)
+        # منقضی شده؟
+        if (now - created).total_seconds() > PAYMENT_TIMEOUT:
+            db.expire_payment(payment.payment_id)
+            log.info("payment expired: %s", payment.payment_id)
             try:
                 await bot.send_message(
-                    charge.telegram_id,
-                    "⏱ مهلت پرداخت منقضی شد.\n"
-                    "برای شارژ مجدد دوباره «💰 افزایش موجودی» رو بزن.",
+                    payment.telegram_id,
+                    f"⏰ مهلت پرداخت سفارش منقضی شد.\n"
+                    f"🆔 شناسه: `{payment.payment_id}`\n\n"
+                    f"برای خرید مجدد از منو استفاده کن.",
+                    parse_mode="Markdown",
                 )
             except Exception:
-                log.exception("expire notify failed")
+                pass
             continue
 
-        # گرفتن تراکنش‌های ورودی
         try:
-            if charge.network == "BEP20":
-                txs = await check_bep20_incoming(
-                    settings.usdt_bep20_address,
-                    settings.bscscan_api_key,
-                    after_ts=created_ts - 60,
-                )
-            else:
-                txs = await check_trc20_incoming(
-                    settings.usdt_trc20_address,
-                    after_ts=created_ts - 60,
-                )
-        except Exception:
-            log.exception("tx fetch failed for charge %s", charge.charge_id)
-            continue
-
-        for tx in txs:
-            if not tx.get("hash"):
-                continue
-            if db.tx_hash_used(tx["hash"]):
-                continue
-            # مطابقت مبلغ (تولرانس ۰.۰۰۰۵)
-            if abs(tx["amount"] - charge.unique_amount) < 0.0005:
-                db.confirm_charge(charge.charge_id, tx["hash"])
-                new_bal = db.add_balance(charge.telegram_id, charge.amount_toman)
-                log.info(
-                    "charge %s confirmed — tx=%s toman=%d",
-                    charge.charge_id, tx["hash"][:12], charge.amount_toman,
-                )
-                try:
-                    await bot.send_message(
-                        charge.telegram_id,
-                        f"✅ پرداخت تأیید شد!\n\n"
-                        f"💰 {fa(f'{charge.amount_toman:,}')} تومان به کیف پولت اضافه شد.\n"
-                        f"💳 موجودی فعلی: {fa(f'{int(new_bal):,}')} تومان",
+            if payment.payment_method == "pirooz":
+                log.info("Checking pirooz order: %s", payment.payment_id)
+                data = await pirooz.check_status(payment.payment_id)
+                if data.get("status") == "approved":
+                    tracking = data.get("tracking_code", "")
+                    db.confirm_payment(payment.payment_id, tracking_code=tracking)
+                    log.info("MATCHED! payment_id=%s, method=pirooz, tracking=%s",
+                             payment.payment_id, tracking)
+                    await create_config_and_deliver(
+                        payment_id=payment.payment_id,
+                        bot=bot, db=db, panel=panel, settings=settings,
                     )
-                except Exception:
-                    log.exception("confirm notify failed")
-                break
+
+            elif payment.payment_method == "usdt_bep20":
+                log.info("Checking BEP20 charge: %s, amount: %s",
+                         payment.payment_id, payment.unique_amount)
+                if bep20_txs is None:
+                    after_ts = int((now - timedelta(hours=1)).timestamp())
+                    bep20_txs = await check_bep20(
+                        settings.usdt_bep20_address,
+                        settings.bscscan_api_key,
+                        after_ts,
+                    )
+                for tx in bep20_txs:
+                    if not tx.get("hash"):
+                        continue
+                    if db.tx_hash_used(tx["hash"]):
+                        continue
+                    if abs(tx["amount"] - (payment.unique_amount or 0)) <= 0.001:
+                        log.info("MATCHED! payment_id=%s, method=usdt_bep20, tx=%s",
+                                 payment.payment_id, tx["hash"])
+                        db.confirm_payment(payment.payment_id, tx_hash=tx["hash"])
+                        await create_config_and_deliver(
+                            payment_id=payment.payment_id,
+                            bot=bot, db=db, panel=panel, settings=settings,
+                        )
+                        break
+
+            elif payment.payment_method == "usdt_trc20":
+                log.info("Checking TRC20 charge: %s, amount: %s",
+                         payment.payment_id, payment.unique_amount)
+                if trc20_txs is None:
+                    after_ts = int((now - timedelta(hours=1)).timestamp())
+                    trc20_txs = await check_trc20(
+                        settings.usdt_trc20_address,
+                        after_ts,
+                    )
+                for tx in trc20_txs:
+                    if not tx.get("hash"):
+                        continue
+                    if db.tx_hash_used(tx["hash"]):
+                        continue
+                    if abs(tx["amount"] - (payment.unique_amount or 0)) <= 0.001:
+                        log.info("MATCHED! payment_id=%s, method=usdt_trc20, tx=%s",
+                                 payment.payment_id, tx["hash"])
+                        db.confirm_payment(payment.payment_id, tx_hash=tx["hash"])
+                        await create_config_and_deliver(
+                            payment_id=payment.payment_id,
+                            bot=bot, db=db, panel=panel, settings=settings,
+                        )
+                        break
+
+        except Exception:
+            log.exception("error checking payment %s", payment.payment_id)
 
 
-async def charge_monitor_loop(bot: Bot, db: DB, settings: Settings) -> None:
-    """حلقه‌ای که هر ۳۰ ثانیه تراکنش‌ها رو چک می‌کنه."""
-    log.info("charge monitor started")
+async def charge_monitor_loop(bot, db: DB, settings: Settings, pirooz: PiroozClient, panel) -> None:
+    log.info("payment monitor started")
     while True:
         await asyncio.sleep(30)
         try:
-            await _check_once(bot, db, settings)
+            await _check_once(bot, db, settings, pirooz, panel)
         except Exception:
-            log.exception("charge monitor unexpected error")
+            log.exception("payment monitor unexpected error")

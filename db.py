@@ -1,55 +1,49 @@
 """مدیریت دیتابیس SQLite."""
 import sqlite3
-import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users (
     telegram_id      INTEGER   PRIMARY KEY,
     username         TEXT,
     first_name       TEXT      NOT NULL DEFAULT '',
-    balance_toman    REAL      NOT NULL DEFAULT 0,
     total_purchases  INTEGER   NOT NULL DEFAULT 0,
     created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS orders (
-    order_id         TEXT      PRIMARY KEY,
-    telegram_id      INTEGER   NOT NULL,
-    plan_gb          INTEGER   NOT NULL,
-    price_toman      INTEGER   NOT NULL,
-    days             INTEGER   NOT NULL DEFAULT 30,
-    status           TEXT      NOT NULL DEFAULT 'pending',
-    panel_username   TEXT,
-    sub_link         TEXT,
-    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    delivered_at     TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS wallet_charges (
-    charge_id        TEXT      PRIMARY KEY,
-    telegram_id      INTEGER   NOT NULL,
-    amount_usdt      REAL      NOT NULL,
-    amount_toman     INTEGER   NOT NULL,
-    unique_amount    REAL      NOT NULL,
-    network          TEXT      NOT NULL,
-    status           TEXT      NOT NULL DEFAULT 'pending',
-    tx_hash          TEXT,
-    created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    confirmed_at     TIMESTAMP
+CREATE TABLE IF NOT EXISTS payments (
+    payment_id           TEXT      PRIMARY KEY,
+    telegram_id          INTEGER   NOT NULL,
+    plan_gb              INTEGER   NOT NULL,
+    plan_days            INTEGER   NOT NULL DEFAULT 30,
+    price_toman          INTEGER   NOT NULL,
+    payment_method       TEXT      NOT NULL,
+    amount_usdt          REAL,
+    unique_amount        REAL,
+    network              TEXT,
+    tx_hash              TEXT,
+    pirooz_order_id      TEXT,
+    pirooz_tracking_code TEXT,
+    status               TEXT      NOT NULL DEFAULT 'pending',
+    panel_username       TEXT,
+    sub_link             TEXT,
+    configs              TEXT,
+    created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at           TIMESTAMP,
+    confirmed_at         TIMESTAMP,
+    delivered_at         TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS settings (
-    key              TEXT      PRIMARY KEY,
-    value            TEXT      NOT NULL,
-    updated_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    key        TEXT      PRIMARY KEY,
+    value      TEXT      NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_orders_tg       ON orders(telegram_id);
-CREATE INDEX IF NOT EXISTS idx_charges_tg      ON wallet_charges(telegram_id);
-CREATE INDEX IF NOT EXISTS idx_charges_status  ON wallet_charges(status);
+CREATE INDEX IF NOT EXISTS idx_payments_tg     ON payments(telegram_id);
+CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
 """
 
 
@@ -58,37 +52,32 @@ class User:
     telegram_id: int
     username: str | None
     first_name: str
-    balance_toman: float
     total_purchases: int
     created_at: str
 
 
 @dataclass
-class Order:
-    order_id: str
+class Payment:
+    payment_id: str
     telegram_id: int
     plan_gb: int
+    plan_days: int
     price_toman: int
-    days: int
+    payment_method: str
+    amount_usdt: float | None
+    unique_amount: float | None
+    network: str | None
+    tx_hash: str | None
+    pirooz_order_id: str | None
+    pirooz_tracking_code: str | None
     status: str
     panel_username: str | None
     sub_link: str | None
+    configs: str | None
     created_at: str
-    delivered_at: str | None
-
-
-@dataclass
-class WalletCharge:
-    charge_id: str
-    telegram_id: int
-    amount_usdt: float
-    amount_toman: int
-    unique_amount: float
-    network: str
-    status: str
-    tx_hash: str | None
-    created_at: str
+    expires_at: str | None
     confirmed_at: str | None
+    delivered_at: str | None
 
 
 class DB:
@@ -128,7 +117,6 @@ class DB:
         return User(**dict(row)) if row else None
 
     def find_user(self, query: str) -> User | None:
-        """جستجو با telegram_id یا username."""
         with self._conn() as conn:
             try:
                 uid = int(query)
@@ -144,27 +132,6 @@ class DB:
                 "SELECT * FROM users WHERE LOWER(username) = ?", (uname,)
             ).fetchone()
         return User(**dict(row)) if row else None
-
-    def get_balance(self, telegram_id: int) -> float:
-        user = self.get_user(telegram_id)
-        return user.balance_toman if user else 0.0
-
-    def add_balance(self, telegram_id: int, amount_toman: int) -> float:
-        with self._conn() as conn:
-            conn.execute(
-                "UPDATE users SET balance_toman = balance_toman + ? WHERE telegram_id = ?",
-                (amount_toman, telegram_id),
-            )
-        return self.get_balance(telegram_id)
-
-    def deduct_balance(self, telegram_id: int, amount_toman: int) -> bool:
-        with self._conn() as conn:
-            cur = conn.execute(
-                "UPDATE users SET balance_toman = balance_toman - ? "
-                "WHERE telegram_id = ? AND balance_toman >= ?",
-                (amount_toman, telegram_id, amount_toman),
-            )
-            return cur.rowcount == 1
 
     def increment_purchases(self, telegram_id: int) -> None:
         with self._conn() as conn:
@@ -184,163 +151,203 @@ class DB:
 
     def list_users_paginated(
         self, page: int = 0, page_size: int = 20
-    ) -> tuple[list[User], int]:
+    ) -> tuple[list[dict], int]:
         offset = page * page_size
         with self._conn() as conn:
             total = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
             rows = conn.execute(
-                "SELECT * FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                """
+                SELECT u.telegram_id, u.username, u.first_name,
+                       u.total_purchases, u.created_at,
+                       COALESCE(SUM(CASE WHEN p.status='delivered' THEN p.price_toman ELSE 0 END), 0) AS purchase_sum
+                FROM users u
+                LEFT JOIN payments p ON u.telegram_id = p.telegram_id
+                GROUP BY u.telegram_id
+                ORDER BY u.created_at DESC
+                LIMIT ? OFFSET ?
+                """,
                 (page_size, offset),
             ).fetchall()
-        return [User(**dict(r)) for r in rows], total
+        return [dict(r) for r in rows], total
 
-    # ─── Orders ──────────────────────────────────────────────────────────────
+    # ─── Payments ─────────────────────────────────────────────────────────────
 
-    def create_order(
-        self, telegram_id: int, plan_gb: int, price_toman: int, days: int = 30
+    def create_payment(
+        self,
+        payment_id: str,
+        telegram_id: int,
+        plan_gb: int,
+        plan_days: int,
+        price_toman: int,
+        payment_method: str,
+        amount_usdt: float | None = None,
+        unique_amount: float | None = None,
+        network: str | None = None,
     ) -> str:
-        order_id = uuid.uuid4().hex[:16].upper()
+        now = datetime.now(timezone.utc)
+        expires_at = (now + timedelta(days=plan_days)).isoformat()
         with self._conn() as conn:
             conn.execute(
-                "INSERT INTO orders (order_id, telegram_id, plan_gb, price_toman, days) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (order_id, telegram_id, plan_gb, price_toman, days),
+                """
+                INSERT INTO payments
+                (payment_id, telegram_id, plan_gb, plan_days, price_toman,
+                 payment_method, amount_usdt, unique_amount, network, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (payment_id, telegram_id, plan_gb, plan_days, price_toman,
+                 payment_method, amount_usdt, unique_amount, network, expires_at),
             )
-        return order_id
+        return payment_id
 
-    def deliver_order(self, order_id: str, panel_username: str, sub_link: str) -> None:
-        with self._conn() as conn:
-            conn.execute(
-                "UPDATE orders SET status='delivered', panel_username=?, sub_link=?, "
-                "delivered_at=CURRENT_TIMESTAMP WHERE order_id=?",
-                (panel_username, sub_link, order_id),
-            )
-
-    def fail_order(self, order_id: str) -> None:
-        with self._conn() as conn:
-            conn.execute("UPDATE orders SET status='failed' WHERE order_id=?", (order_id,))
-
-    def get_order(self, order_id: str) -> Order | None:
+    def get_payment(self, payment_id: str) -> Payment | None:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT * FROM orders WHERE order_id=?", (order_id,)
+                "SELECT * FROM payments WHERE payment_id = ?", (payment_id,)
             ).fetchone()
-        return Order(**dict(row)) if row else None
+        return Payment(**dict(row)) if row else None
 
-    def list_user_orders(self, telegram_id: int, limit: int = 5) -> list[Order]:
+    def confirm_payment(
+        self,
+        payment_id: str,
+        tx_hash: str | None = None,
+        tracking_code: str | None = None,
+    ) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                """
+                UPDATE payments
+                SET status='confirmed', tx_hash=?, pirooz_tracking_code=?,
+                    confirmed_at=CURRENT_TIMESTAMP
+                WHERE payment_id=?
+                """,
+                (tx_hash, tracking_code, payment_id),
+            )
+
+    def deliver_payment(
+        self,
+        payment_id: str,
+        panel_username: str,
+        sub_link: str,
+        configs: str,
+    ) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                """
+                UPDATE payments
+                SET status='delivered', panel_username=?, sub_link=?, configs=?,
+                    delivered_at=CURRENT_TIMESTAMP
+                WHERE payment_id=?
+                """,
+                (panel_username, sub_link, configs, payment_id),
+            )
+
+    def fail_payment(self, payment_id: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE payments SET status='failed' WHERE payment_id=?",
+                (payment_id,),
+            )
+
+    def expire_payment(self, payment_id: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE payments SET status='expired' WHERE payment_id=?",
+                (payment_id,),
+            )
+
+    def cancel_payment(self, payment_id: str) -> None:
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE payments SET status='expired' WHERE payment_id=? AND status='pending'",
+                (payment_id,),
+            )
+
+    def get_pending_payments(self) -> list[Payment]:
         with self._conn() as conn:
             rows = conn.execute(
-                "SELECT * FROM orders WHERE telegram_id=? AND status='delivered' "
-                "ORDER BY created_at DESC LIMIT ?",
+                "SELECT * FROM payments WHERE status='pending' ORDER BY created_at ASC"
+            ).fetchall()
+        return [Payment(**dict(r)) for r in rows]
+
+    def get_payments_by_status(self, status: str, limit: int = 10) -> list[Payment]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM payments WHERE status=? ORDER BY created_at DESC LIMIT ?",
+                (status, limit),
+            ).fetchall()
+        return [Payment(**dict(r)) for r in rows]
+
+    def get_user_delivered_payments(self, telegram_id: int, limit: int = 5) -> list[Payment]:
+        with self._conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM payments WHERE telegram_id=? AND status='delivered' "
+                "ORDER BY delivered_at DESC LIMIT ?",
                 (telegram_id, limit),
             ).fetchall()
-        return [Order(**dict(r)) for r in rows]
+        return [Payment(**dict(r)) for r in rows]
 
-    def get_stats(self) -> dict:
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        with self._conn() as conn:
-            total_users    = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-            orders_today   = conn.execute(
-                "SELECT COUNT(*) FROM orders WHERE status='delivered' AND DATE(delivered_at)=?",
-                (today,),
-            ).fetchone()[0]
-            orders_total   = conn.execute(
-                "SELECT COUNT(*) FROM orders WHERE status='delivered'"
-            ).fetchone()[0]
-            rev_today      = conn.execute(
-                "SELECT COALESCE(SUM(price_toman),0) FROM orders "
-                "WHERE status='delivered' AND DATE(delivered_at)=?",
-                (today,),
-            ).fetchone()[0]
-            rev_total      = conn.execute(
-                "SELECT COALESCE(SUM(price_toman),0) FROM orders WHERE status='delivered'"
-            ).fetchone()[0]
-            charges_today  = conn.execute(
-                "SELECT COUNT(*) FROM wallet_charges WHERE status='confirmed' AND DATE(confirmed_at)=?",
-                (today,),
-            ).fetchone()[0]
-        return {
-            "total_users":    total_users,
-            "orders_today":   orders_today,
-            "orders_total":   orders_total,
-            "revenue_today":  int(rev_today),
-            "revenue_total":  int(rev_total),
-            "charges_today":  charges_today,
-        }
-
-    # ─── Wallet Charges ──────────────────────────────────────────────────────
-
-    def create_charge(
-        self,
-        telegram_id: int,
-        amount_usdt: float,
-        amount_toman: int,
-        unique_amount: float,
-        network: str,
-    ) -> str:
-        charge_id = uuid.uuid4().hex[:16].upper()
-        with self._conn() as conn:
-            conn.execute(
-                "INSERT INTO wallet_charges "
-                "(charge_id, telegram_id, amount_usdt, amount_toman, unique_amount, network) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (charge_id, telegram_id, amount_usdt, amount_toman, unique_amount, network),
-            )
-        return charge_id
-
-    def get_pending_charges(self) -> list[WalletCharge]:
-        with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT * FROM wallet_charges WHERE status='pending'"
-            ).fetchall()
-        return [WalletCharge(**dict(r)) for r in rows]
-
-    def get_user_pending_charge(self, telegram_id: int) -> WalletCharge | None:
+    def get_user_stats(self, telegram_id: int) -> dict:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT * FROM wallet_charges WHERE telegram_id=? AND status='pending' "
-                "ORDER BY created_at DESC LIMIT 1",
+                "SELECT COUNT(*) as purchase_count, "
+                "COALESCE(SUM(price_toman), 0) as purchase_sum "
+                "FROM payments WHERE telegram_id=? AND status='delivered'",
                 (telegram_id,),
             ).fetchone()
-        return WalletCharge(**dict(row)) if row else None
-
-    def confirm_charge(self, charge_id: str, tx_hash: str) -> None:
-        with self._conn() as conn:
-            conn.execute(
-                "UPDATE wallet_charges SET status='confirmed', tx_hash=?, "
-                "confirmed_at=CURRENT_TIMESTAMP WHERE charge_id=?",
-                (tx_hash, charge_id),
-            )
-
-    def expire_charge(self, charge_id: str) -> None:
-        with self._conn() as conn:
-            conn.execute(
-                "UPDATE wallet_charges SET status='expired' WHERE charge_id=?", (charge_id,)
-            )
-
-    def cancel_user_pending_charge(self, telegram_id: int) -> None:
-        with self._conn() as conn:
-            conn.execute(
-                "UPDATE wallet_charges SET status='cancelled' "
-                "WHERE telegram_id=? AND status='pending'",
-                (telegram_id,),
-            )
+        return {"count": row[0], "sum": int(row[1])}
 
     def tx_hash_used(self, tx_hash: str) -> bool:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT 1 FROM wallet_charges WHERE tx_hash=?", (tx_hash,)
+                "SELECT 1 FROM payments WHERE tx_hash=?", (tx_hash,)
             ).fetchone()
         return row is not None
 
     def has_pending_unique(self, unique_amount: float, network: str) -> bool:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT 1 FROM wallet_charges "
+                "SELECT 1 FROM payments "
                 "WHERE unique_amount=? AND network=? AND status='pending'",
                 (unique_amount, network),
             ).fetchone()
         return row is not None
+
+    # ─── Stats ────────────────────────────────────────────────────────────────
+
+    def get_stats(self) -> dict:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with self._conn() as conn:
+            total_users = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            orders_today = conn.execute(
+                "SELECT COUNT(*) FROM payments WHERE status='delivered' AND DATE(delivered_at)=?",
+                (today,),
+            ).fetchone()[0]
+            orders_total = conn.execute(
+                "SELECT COUNT(*) FROM payments WHERE status='delivered'"
+            ).fetchone()[0]
+            rev_today = conn.execute(
+                "SELECT COALESCE(SUM(price_toman),0) FROM payments "
+                "WHERE status='delivered' AND DATE(delivered_at)=?",
+                (today,),
+            ).fetchone()[0]
+            rev_total = conn.execute(
+                "SELECT COALESCE(SUM(price_toman),0) FROM payments WHERE status='delivered'"
+            ).fetchone()[0]
+            pending_count = conn.execute(
+                "SELECT COUNT(*) FROM payments WHERE status='pending'"
+            ).fetchone()[0]
+            failed_count = conn.execute(
+                "SELECT COUNT(*) FROM payments WHERE status='failed'"
+            ).fetchone()[0]
+        return {
+            "total_users":   total_users,
+            "orders_today":  orders_today,
+            "orders_total":  orders_total,
+            "revenue_today": int(rev_today),
+            "revenue_total": int(rev_total),
+            "pending_count": pending_count,
+            "failed_count":  failed_count,
+        }
 
     # ─── Settings ─────────────────────────────────────────────────────────────
 
