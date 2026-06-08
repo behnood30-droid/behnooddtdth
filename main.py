@@ -10,6 +10,7 @@ from bot import register_handlers
 from config import load_settings
 from db import DB
 from pasarguard import PasarGuardClient
+from plisio import PlisioClient
 from pirooz import PiroozClient
 from scheduler import charge_monitor_loop
 from webhook import create_webhook_app
@@ -39,17 +40,19 @@ async def run() -> None:
         base_url=settings.pirooz_base_url,
     )
 
+    plisio = PlisioClient(secret_key=settings.plisio_secret_key)
+
     tg_app: Application = Application.builder().token(settings.telegram_token).build()
     tg_app.bot_data.update({
         "settings": settings,
         "db": db,
         "panel": panel,
         "pirooz": pirooz,
+        "plisio": plisio,
     })
     register_handlers(tg_app)
 
-    # FastAPI for Pirooz webhook
-    fastapi_app = create_webhook_app(db, settings, pirooz, panel, tg_app.bot)
+    fastapi_app = create_webhook_app(db, settings, pirooz, plisio, panel, tg_app.bot)
     uv_config = uvicorn.Config(
         fastapi_app,
         host="0.0.0.0",
@@ -59,7 +62,6 @@ async def run() -> None:
     )
     uv_server = uvicorn.Server(uv_config)
 
-    # Scheduler
     monitor_task = asyncio.create_task(
         charge_monitor_loop(tg_app.bot, db, settings, pirooz, panel)
     )
@@ -74,7 +76,6 @@ async def run() -> None:
         await tg_app.updater.start_polling(drop_pending_updates=True)
         log.info("Bot started (polling mode)")
 
-        # Run uvicorn alongside PTB
         uv_task = asyncio.create_task(uv_server.serve())
         log.info("Webhook server started on port %d", settings.webhook_port)
 

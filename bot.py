@@ -32,9 +32,8 @@ from pasarguard import PasarGuardClient
 from payment import (
     on_cancel_payment,
     on_check_payment,
+    on_pay_plisio,
     on_pay_pirooz,
-    on_pay_usdt,
-    on_usdt_network,
     show_payment_methods,
 )
 from plans import PLANS, get_plan
@@ -364,14 +363,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         plan_id = int(plan_id_s)
         if method == "pirooz":
             await on_pay_pirooz(query, context, plan_id)
-        elif method == "usdt":
-            await on_pay_usdt(query, context, plan_id)
-        return
-
-    # شبکه USDT
-    if data.startswith("pu:"):
-        _, plan_id_s, network = data.split(":")
-        await on_usdt_network(query, context, int(plan_id_s), network)
+        elif method == "plisio":
+            await on_pay_plisio(query, context, plan_id)
         return
 
     # بررسی وضعیت

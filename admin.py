@@ -241,7 +241,7 @@ async def _cb_pending(query, context: ContextTypes.DEFAULT_TYPE) -> None:
     lines = [f"⏳ *پرداخت‌های در انتظار* ({fa(len(payments))} عدد):\n"]
     keyboard_rows = []
     for p in payments:
-        method_fa = {"pirooz": "ریالی", "usdt_bep20": "BEP20", "usdt_trc20": "TRC20"}.get(
+        method_fa = {"pirooz": "ریالی", "plisio": "کریپتو"}.get(
             p.payment_method, p.payment_method
         )
         lines.append(
