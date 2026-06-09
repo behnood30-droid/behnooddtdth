@@ -20,7 +20,7 @@ SEP = "━━━━━━━━━━━━━━━━━━━━"
 
 
 def _make_payment_id(telegram_id: int) -> str:
-    return f"peech_{telegram_id}_{int(time.time())}"
+    return f"p{telegram_id}t{int(time.time())}"
 
 
 def _ownership_ok(payment, telegram_id: int) -> bool:
