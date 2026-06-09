@@ -191,9 +191,13 @@ async def _on_my_services(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         except Exception:
             info = {}
 
-        used = info.get("used_traffic", 0)
-        total = info.get("data_limit", payment.plan_gb * 1_073_741_824)
-        expire_ts = info.get("expire")
+        used = int(info.get("used_traffic") or 0)
+        total = int(info.get("data_limit") or payment.plan_gb * 1_073_741_824)
+        expire_raw = info.get("expire")
+        try:
+            expire_ts = int(expire_raw) if expire_raw else None
+        except (TypeError, ValueError):
+            expire_ts = None
         status = info.get("status", "active")
         panel_status = {
             "active": "🟢 فعال",

@@ -42,11 +42,17 @@ def to_jalali(dt_input) -> str:
         return str(dt_input)[:10]
 
 
-def unix_to_jalali(ts: int | None) -> str:
+def unix_to_jalali(ts) -> str:
     """Unix timestamp رو به تاریخ شمسی تبدیل میکنه."""
     if not ts:
         return "نامشخص"
-    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    try:
+        ts_int = int(ts)
+    except (TypeError, ValueError):
+        return to_jalali(ts)
+    if ts_int <= 0:
+        return "نامشخص"
+    dt = datetime.fromtimestamp(ts_int, tz=timezone.utc)
     return to_jalali(dt)
 
 
