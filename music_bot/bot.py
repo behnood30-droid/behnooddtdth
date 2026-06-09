@@ -1,10 +1,13 @@
+import asyncio
 import logging
 import os
+import time
 from typing import Optional
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import TelegramError
+from telegram.error import RetryAfter, TelegramError
 from telegram.ext import (
+    AIORateLimiter,
     Application,
     CallbackQueryHandler,
     CommandHandler,
@@ -25,20 +28,83 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Membership result cache
+# key: (user_id, channel_username)  value: (is_member, monotonic_timestamp)
+# ---------------------------------------------------------------------------
+_membership_cache: dict[tuple[int, str], tuple[bool, float]] = {}
+_CACHE_TTL = 300  # seconds — cached “member” result stays valid 5 min
 
-async def _check_membership(bot, user_id: int, channels) -> list:
-    """Return the list of channels the user has NOT joined."""
+
+def _cache_get(user_id: int, username: str) -> bool | None:
+    entry = _membership_cache.get((user_id, username))
+    if entry and time.monotonic() - entry[1] < _CACHE_TTL:
+        return entry[0]
+    return None
+
+
+def _cache_set(user_id: int, username: str, is_member: bool) -> None:
+    _membership_cache[(user_id, username)] = (is_member, time.monotonic())
+
+
+def _cache_invalidate(user_id: int) -> None:
+    """Drop all cache entries for a user (called when they tap 'عضو شدم')."""
+    stale = [k for k in _membership_cache if k[0] == user_id]
+    for k in stale:
+        del _membership_cache[k]
+
+
+# ---------------------------------------------------------------------------
+# Membership check  (cached + RetryAfter-aware)
+# ---------------------------------------------------------------------------
+async def _check_one(bot, user_id: int, username: str) -> bool:
+    """Return True if user is a member of `username`. Retries once on flood."""
+    try:
+        member = await bot.get_chat_member(chat_id=username, user_id=user_id)
+        return member.status not in ("left", "kicked")
+    except RetryAfter as e:
+        wait = e.retry_after + 1
+        logger.warning("Flood control hit for %s — sleeping %ss", username, wait)
+        await asyncio.sleep(wait)
+        try:
+            member = await bot.get_chat_member(chat_id=username, user_id=user_id)
+            return member.status not in ("left", "kicked")
+        except TelegramError as inner:
+            logger.error("Retry after flood still failed for %s: %s", username, inner)
+            return False
+    except TelegramError as e:
+        logger.warning("get_chat_member(%s) error: %s", username, e)
+        return False
+
+
+async def _check_membership(bot, user_id: int, channels, force: bool = False) -> list:
+    """
+    Return the subset of channels the user has NOT joined.
+    Results are cached per (user_id, channel) for _CACHE_TTL seconds.
+    Pass force=True to bypass cache (used after user taps 'عضو شدم').
+    """
     missing = []
     for ch in channels:
-        try:
-            member = await bot.get_chat_member(chat_id=ch["username"], user_id=user_id)
-            if member.status in ("left", "kicked"):
-                missing.append(ch)
-        except TelegramError:
+        username = ch["username"]
+
+        if not force:
+            cached = _cache_get(user_id, username)
+            if cached is not None:
+                if not cached:
+                    missing.append(ch)
+                continue
+
+        is_member = await _check_one(bot, user_id, username)
+        _cache_set(user_id, username, is_member)
+        if not is_member:
             missing.append(ch)
+
     return missing
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 def _build_join_keyboard(missing_channels, song_id: int) -> InlineKeyboardMarkup:
     keyboard = []
     for ch in missing_channels:
@@ -59,6 +125,9 @@ async def _send_song(bot, chat_id: int, song) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# Handlers
+# ---------------------------------------------------------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
 
@@ -122,7 +191,9 @@ async def membership_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     channels = await database.get_channels()
-    missing = await _check_membership(context.bot, user.id, channels)
+    # Invalidate cache so the fresh join is detected immediately
+    _cache_invalidate(user.id)
+    missing = await _check_membership(context.bot, user.id, channels, force=True)
 
     if missing:
         markup = _build_join_keyboard(missing, song_id)
@@ -160,17 +231,22 @@ async def _post_init(application: Application) -> None:
 
 
 def main() -> None:
-    app = Application.builder().token(BOT_TOKEN).post_init(_post_init).build()
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        # Queues all outgoing API calls; auto-retries on Telegram 429 RetryAfter
+        .rate_limiter(AIORateLimiter(max_retries=3))
+        .post_init(_post_init)
+        .build()
+    )
 
     app.add_handler(admin_module.get_upload_handler())
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("songs", admin_module.list_songs))
     app.add_handler(CommandHandler("deletesong", admin_module.delete_song_cmd))
     app.add_handler(CommandHandler("channels", admin_module.list_channels))
     app.add_handler(CommandHandler("addchannel", admin_module.add_channel_cmd))
     app.add_handler(CommandHandler("removechannel", admin_module.remove_channel_cmd))
-
     app.add_handler(CallbackQueryHandler(membership_callback, pattern=r"^check_\d+$"))
     app.add_error_handler(error_handler)
 
