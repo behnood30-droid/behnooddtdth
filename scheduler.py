@@ -49,11 +49,14 @@ async def _check_once(bot, db: DB, settings: Settings, pirooz: PiroozClient, pan
             if payment.payment_method == "pirooz":
                 log.info("Checking pirooz order: %s", payment.payment_id)
                 data = await pirooz.check_status(payment.payment_id)
-                if data.get("status") == "approved":
+                pirooz_status = data.get("status", "")
+                log.info("pirooz response for %s: status=%r full=%s",
+                         payment.payment_id, pirooz_status, data)
+                if pirooz_status in ("approved", "paid", "success", "completed", "confirmed"):
                     tracking = data.get("tracking_code", "")
                     db.confirm_payment(payment.payment_id, tracking_code=tracking)
-                    log.info("MATCHED! payment_id=%s, method=pirooz, tracking=%s",
-                             payment.payment_id, tracking)
+                    log.info("MATCHED! payment_id=%s, method=pirooz, status=%s, tracking=%s",
+                             payment.payment_id, pirooz_status, tracking)
                     await create_config_and_deliver(
                         payment_id=payment.payment_id,
                         bot=bot, db=db, panel=panel, settings=settings,
