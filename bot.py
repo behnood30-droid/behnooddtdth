@@ -1,7 +1,6 @@
 """هندلرهای اصلی ربات تلگرام."""
 import json
 import logging
-import os
 from datetime import datetime, timezone
 
 from telegram import (
@@ -383,9 +382,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         db: DB = context.bot_data["db"]
         payment = db.get_payment(pid)
         if not payment or payment.telegram_id != query.from_user.id:
-            await query.answer("⛔ دسترسی ندارید.", show_alert=True)
+            await query.message.reply_text("⛔ دسترسی ندارید.")
             return
-        await query.answer()
         await query.message.reply_text(
             f"🔗 *لینک اشتراک:*\n`{payment.sub_link}`",
             parse_mode="Markdown",
@@ -398,10 +396,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         db: DB = context.bot_data["db"]
         payment = db.get_payment(pid)
         if not payment or payment.telegram_id != query.from_user.id:
-            await query.answer("⛔ دسترسی ندارید.", show_alert=True)
+            await query.message.reply_text("⛔ دسترسی ندارید.")
             return
         if not payment.configs:
-            await query.answer("کانفیگی یافت نشد.", show_alert=True)
+            await query.message.reply_text("کانفیگی یافت نشد.")
             return
         try:
             links = json.loads(payment.configs)

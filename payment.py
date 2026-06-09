@@ -167,7 +167,7 @@ async def on_pay_plisio(query, context: ContextTypes.DEFAULT_TYPE, plan_id: int)
             payment_id=payment_id,
             source_amount=usd_amount,
             order_name=f"خرید VPN {plan.gb} گیگ",
-            callback_url=f"{settings.webhook_domain}/webhook/plisio",
+            callback_url=f"{settings.webhook_domain}/webhook/plisio?json=true",
             success_url=bot_url,
             fail_url=bot_url,
         )

@@ -35,7 +35,7 @@ async def create_config_and_deliver(
     try:
         await bot.send_message(
             tid,
-            "✅ پرداخت تأیید شد، در حال ساخت سرویس\\.\\.\\.\n⏳ یه لحظه صبر کن 🕐",
+            "✅ پرداخت تأیید شد، در حال ساخت سرویس...\n⏳ یه لحظه صبر کن 🕐",
         )
     except Exception:
         pass
@@ -94,7 +94,7 @@ async def create_config_and_deliver(
     try:
         await bot.send_message(
             tid,
-            f"⚠️ مشکلی در ساخت سرویس پیش اومد\\.\n"
+            f"⚠️ مشکلی در ساخت سرویس پیش اومد.\n"
             f"لطفاً به پشتیبانی پیام بده تا فوراً پیگیری کنه:\n\n"
             f"👤 @{settings.support_username}\n\n"
             f"🆔 شناسه سفارش: `{payment_id}`",
