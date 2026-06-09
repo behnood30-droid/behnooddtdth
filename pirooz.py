@@ -10,13 +10,17 @@ log = logging.getLogger(__name__)
 
 class PiroozClient:
     def __init__(self, api_key: str, provider_key: str, base_url: str) -> None:
-        self._api_key = api_key
-        self._provider_key = provider_key
+        self._api_key = (api_key or "").strip()
+        self._provider_key = (provider_key or "").strip()
         self._base_url = base_url.rstrip("/")
         self._headers = {
             "Content-Type": "application/json",
-            "X-API-Key": api_key,
+            "X-API-Key": self._api_key,
         }
+        log.debug(
+            "Pirooz init: api_key_length=%d, first_5=%s",
+            len(self._api_key), self._api_key[:5],
+        )
 
     async def create_payment(
         self, payment_id: str, amount_toman: int, plan_gb: int
@@ -28,11 +32,20 @@ class PiroozClient:
             "amount": amount_toman,
             "description": f"خرید {plan_gb} گیگ - ۳۰ روزه",
         }
+        log.debug(
+            "Pirooz request: api_key_length=%d, first_5=%s",
+            len(self._api_key), self._api_key[:5],
+        )
         async with httpx.AsyncClient(follow_redirects=True, timeout=20) as client:
             resp = await client.post(
                 f"{self._base_url}/api/v1/payment/request",
                 headers=self._headers,
                 json=body,
+            )
+        if resp.status_code == 401:
+            log.warning(
+                "Pirooz 401 Unauthorized: api_key_length=%d, first_5=%s, body=%s",
+                len(self._api_key), self._api_key[:5], resp.text[:200],
             )
         resp.raise_for_status()
         return resp.json()

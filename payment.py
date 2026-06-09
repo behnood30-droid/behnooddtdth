@@ -140,6 +140,24 @@ async def on_pay_plisio(query, context: ContextTypes.DEFAULT_TYPE, plan_id: int)
         return
 
     usd_amount = round(plan.price_toman / int(rate_str), 2)
+
+    if usd_amount < 3:
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💵 پرداخت ریالی به جاش", callback_data=f"pm:{plan_id}:pirooz")],
+            [InlineKeyboardButton("🔙 انتخاب پلن دیگه", callback_data="cancel_order")],
+        ])
+        await query.edit_message_text(
+            f"⚠️ *پرداخت با ارز دیجیتال در دسترس نیست*\n"
+            f"{SEP}\n\n"
+            f"برای این پلن، مبلغ معادل USDT کمتر از حداقل\n"
+            f"پذیرفته شده توسط درگاه پرداخت (۳ USDT) هست.\n\n"
+            f"لطفاً پلن بالاتری انتخاب کن یا از پرداخت ریالی استفاده کن.\n\n"
+            f"{SEP}",
+            parse_mode="Markdown",
+            reply_markup=keyboard,
+        )
+        return
+
     payment_id = _make_payment_id(query.from_user.id)
     bot_username = settings.bot_username
     bot_url = f"https://t.me/{bot_username}" if bot_username else "https://t.me/"
