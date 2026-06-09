@@ -31,6 +31,34 @@ def admin_only(func):
     return wrapper
 
 
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """نمایش پنل ادمین با لیست همه دستورات."""
+    user_id = update.effective_user.id
+
+    if user_id != ADMIN_ID:
+        await update.message.reply_text(
+            "❌ این پنل فقط برای ادمین در دسترسه.\n\n"
+            f"🆔 آیدی عددی تو: <code>{user_id}</code>\n"
+            "اگه ادمینی، این آیدی رو توی <code>config.py</code> (متغیر ADMIN_ID) بذار.",
+            parse_mode="HTML",
+        )
+        return
+
+    await update.message.reply_text(
+        "🎛 <b>پنل مدیریت ربات موزیک</b>\n\n"
+        "🎵 <b>مدیریت آهنگ‌ها:</b>\n"
+        "• /upload — آپلود آهنگ جدید\n"
+        "• /songs — لیست همه آهنگ‌ها و لینک‌ها\n"
+        "• /deletesong &lt;شناسه&gt; — حذف یه آهنگ\n\n"
+        "📢 <b>مدیریت کانال‌های اجباری:</b>\n"
+        "• /channels — لیست کانال‌های فعلی\n"
+        "• /addchannel @user | عنوان | لینک — افزودن کانال\n"
+        "• /removechannel @user — حذف کانال\n\n"
+        "✅ همه چیز آماده‌ست! برای شروع /upload رو بزن.",
+        parse_mode="HTML",
+    )
+
+
 @admin_only
 async def upload_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(

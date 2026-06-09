@@ -4,7 +4,13 @@ import os
 import time
 from typing import Optional
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    BotCommand,
+    BotCommandScopeChat,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Update,
+)
 from telegram.error import RetryAfter, TelegramError
 from telegram.ext import (
     AIORateLimiter,
@@ -14,7 +20,7 @@ from telegram.ext import (
     ContextTypes,
 )
 
-from config import BOT_TOKEN, LOG_FILE, SONGS_DIR
+from config import ADMIN_ID, BOT_TOKEN, LOG_FILE, SONGS_DIR
 import database
 import admin as admin_module
 
@@ -73,6 +79,7 @@ async def _check_one(bot, user_id: int, username: str) -> bool:
             logger.error("Retry after flood still failed for %s: %s", username, inner)
             return False
     except TelegramError as e:
+        # Bot not admin of private channel, wrong username, etc.
         logger.warning("get_chat_member(%s) error: %s", username, e)
         return False
 
@@ -227,6 +234,29 @@ async def error_handler(update: Optional[Update], context: ContextTypes.DEFAULT_
 async def _post_init(application: Application) -> None:
     await database.init_db()
     os.makedirs(SONGS_DIR, exist_ok=True)
+
+    # دستورات عمومی برای همه کاربران
+    await application.bot.set_my_commands([
+        BotCommand("start", "شروع و دریافت آهنگ"),
+    ])
+
+    # منوی کامل دستورات فقط برای ادمین
+    try:
+        await application.bot.set_my_commands(
+            [
+                BotCommand("admin", "🎛 پنل مدیریت"),
+                BotCommand("upload", "🎵 آپلود آهنگ جدید"),
+                BotCommand("songs", "📃 لیست آهنگ‌ها"),
+                BotCommand("deletesong", "🗑 حذف آهنگ"),
+                BotCommand("channels", "📢 لیست کانال‌ها"),
+                BotCommand("addchannel", "➕ افزودن کانال"),
+                BotCommand("removechannel", "➖ حذف کانال"),
+            ],
+            scope=BotCommandScopeChat(chat_id=ADMIN_ID),
+        )
+    except TelegramError as e:
+        logger.warning("Could not set admin command menu: %s", e)
+
     logger.info("Database initialized. Bot is ready 🎵")
 
 
@@ -234,7 +264,7 @@ def main() -> None:
     app = (
         Application.builder()
         .token(BOT_TOKEN)
-        # Queues all outgoing API calls; auto-retries on Telegram 429 RetryAfter
+        # AIORateLimiter queues all outgoing API calls and auto-respects RetryAfter
         .rate_limiter(AIORateLimiter(max_retries=3))
         .post_init(_post_init)
         .build()
@@ -242,6 +272,7 @@ def main() -> None:
 
     app.add_handler(admin_module.get_upload_handler())
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("admin", admin_module.admin_panel))
     app.add_handler(CommandHandler("songs", admin_module.list_songs))
     app.add_handler(CommandHandler("deletesong", admin_module.delete_song_cmd))
     app.add_handler(CommandHandler("channels", admin_module.list_channels))
