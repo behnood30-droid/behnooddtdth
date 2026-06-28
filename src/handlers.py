@@ -13,6 +13,7 @@ from .db import DB
 from .delivery import deliver_order
 from .pasarguard import PasarGuardClient
 from .tetrapay import TetrapayClient
+from .youtube_handler import build_youtube_conv_handler
 
 log = logging.getLogger(__name__)
 
@@ -140,6 +141,7 @@ async def cmd_deliver(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 def register_handlers(app: Application) -> None:
+    app.add_handler(build_youtube_conv_handler())
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("my_orders", cmd_my_orders))
     app.add_handler(CommandHandler("deliver", cmd_deliver))

@@ -7,3 +7,6 @@ __pycache__/
 venv/
 .idea/
 .vscode/
+downloads/
+client_secrets.json
+youtube_token.json
